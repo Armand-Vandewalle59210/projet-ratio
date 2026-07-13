@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QToolBox,
     QVBoxLayout,
     QWidget,
 )
@@ -45,7 +46,7 @@ class MainWindow(QMainWindow):
         self.open_button.clicked.connect(self.open_spectrum)
 
         self.detect_button = QPushButton("Detect peaks")
-        self.detect_button.clicked.connect(self.detect_peaks_only)
+        self.detect_button.clicked.connect(self.detect_peaks)
 
         self.calculate_button = QPushButton("Calculate ratio")
         self.calculate_button.clicked.connect(self.calculate_ratio)
@@ -127,13 +128,8 @@ class MainWindow(QMainWindow):
         peak_layout.addRow("Tolerance", self.tolerance)
         peak_layout.addRow("Valley size", self.valley_size)
 
-        mariscotti_box = QGroupBox("Mariscotti parameters")
-        mariscotti_box.setCheckable(True)
-        mariscotti_box.setChecked(False)
-        mariscotti_outer_layout = QVBoxLayout(mariscotti_box)
-
-        self.mariscotti_content = QWidget()
-        mariscotti_layout = QFormLayout(self.mariscotti_content)
+        mariscotti_panel = QWidget()
+        mariscotti_layout = QFormLayout(mariscotti_panel)
         mariscotti_layout.addRow("z", self.z_input)
         mariscotti_layout.addRow("w", self.w_input)
         mariscotti_layout.addRow("Sigma factor", self.sigma_factor)
@@ -142,14 +138,15 @@ class MainWindow(QMainWindow):
         mariscotti_layout.addRow(self.smooth_counts)
         mariscotti_layout.addRow("SG window", self.sg_window)
         mariscotti_layout.addRow("SG polyorder", self.sg_polyorder)
-        self.mariscotti_content.setVisible(False)
 
-        mariscotti_box.toggled.connect(self.mariscotti_content.setVisible)
-        mariscotti_outer_layout.addWidget(self.mariscotti_content)
+        advanced_box = QToolBox()
+        advanced_box.addItem(mariscotti_panel, "Mariscotti parameters")
+        advanced_box.setCurrentIndex(-1)
+        advanced_box.setToolTip("Open this section only when you need to tune peak detection.")
 
         layout.addWidget(file_box)
         layout.addWidget(peak_box)
-        layout.addWidget(mariscotti_box)
+        layout.addWidget(advanced_box)
         layout.addWidget(self.detect_button)
         layout.addWidget(self.calculate_button)
         layout.addWidget(QLabel("Detected peaks"))
@@ -205,11 +202,10 @@ class MainWindow(QMainWindow):
 
     def apply_valley_size(self) -> None:
         self.plot.enforce_valley_size(self.valley_size.value())
-        # Do not force a ratio calculation here unless a result already exists.
-        # The Calculate button remains the explicit calculation action.
+        self.calculate_if_possible()
 
-    def detect_peaks_only(self) -> None:
-        """Detect all peaks, update table/markers, and do not calculate ratio."""
+    def detect_peaks(self) -> None:
+        """Detect all peaks without requiring a peak near the target energy."""
         if self.spectrum is None:
             self.results.setText("Load a spectrum first.")
             return
@@ -232,25 +228,27 @@ class MainWindow(QMainWindow):
 
         self._populate_peaks_table()
 
-        # Convenience selection only. No ratio calculation is performed here.
+        # Selecting a target peak is now a convenience, not a requirement for
+        # the peak-detection step itself.
         self.selected_peak = None
         target_message = ""
         try:
             self.selected_peak = nearest_peak(self.peaks, self.target_energy.value(), self.tolerance.value())
-            self._select_peak_row(self.selected_peak)
             self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
-            target_message = f" Nearest target peak selected: {self.selected_peak.peak_energy:.3f} keV."
+            self._select_peak_row(self.selected_peak)
+            target_message = f"\nSelected nearest target peak: {self.selected_peak.peak_energy:.3f} keV."
         except Exception:
             target_message = (
-                f" No peak close to {self.target_energy.value():.1f} keV was auto-selected. "
-                "Select a peak in the table or change the target/tolerance."
+                f"\nNo detected peak within {self.tolerance.value():.1f} keV of "
+                f"{self.target_energy.value():.1f} keV. Select a peak in the table, "
+                "change the target energy, or adjust Mariscotti parameters."
             )
 
         self.plot.set_peaks(self.peaks, self.selected_peak)
-        self.results.setText(
-            f"Detected {len(self.peaks)} fitted peaks." + target_message + "\n"
-            "Click 'Calculate ratio' when the correct peak and valley regions are selected."
-        )
+        self.results.setText(f"Detected {len(self.peaks)} fitted peaks.{target_message}")
+
+        if self.selected_peak is not None:
+            self.calculate_ratio(show_errors=False)
 
     def _populate_peaks_table(self) -> None:
         self.peaks_table.setRowCount(len(self.peaks))
@@ -278,22 +276,17 @@ class MainWindow(QMainWindow):
                 return
 
     def select_peak_from_table(self, row: int, column: int) -> None:
-        """Select a peak and update valley placement, but do not calculate yet."""
         if row < 0 or row >= len(self.peaks):
             return
         self.selected_peak = self.peaks[row]
         self.target_energy.setValue(self.selected_peak.peak_energy)
         self.plot.set_peaks(self.peaks, self.selected_peak)
         self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
-        self.results.setText(
-            f"Selected peak: {self.selected_peak.peak_energy:.3f} keV.\n"
-            "Adjust valley regions if needed, then click 'Calculate ratio'."
-        )
+        self.calculate_ratio()
 
     def calculate_if_possible(self) -> None:
-        # Region dragging should not recalculate automatically anymore.
-        # This keeps the workflow explicit: Detect peaks -> select/adjust -> Calculate ratio.
-        return
+        if self.spectrum is not None and self.selected_peak is not None:
+            self.calculate_ratio(show_errors=False)
 
     def calculate_ratio(self, show_errors: bool = True) -> None:
         if self.spectrum is None:
@@ -301,7 +294,8 @@ class MainWindow(QMainWindow):
             return
 
         if not self.peaks:
-            self.results.setText("Detect peaks first, then select a peak or use a valid target energy.")
+            if show_errors:
+                self.results.setText("Detect peaks first, then select a peak or use a valid target energy.")
             return
 
         if self.selected_peak is None:
@@ -310,11 +304,15 @@ class MainWindow(QMainWindow):
                 self._select_peak_row(self.selected_peak)
                 self.plot.set_peaks(self.peaks, self.selected_peak)
                 self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
-            except Exception:
-                self.results.setText(
-                    "No peak is selected and no detected peak is close enough to the target energy.\n"
-                    "Select one peak in the table or increase the tolerance, then click Calculate ratio again."
-                )
+            except Exception as exc:
+                if show_errors:
+                    self._show_error(
+                        "No selected peak",
+                        RuntimeError(
+                            "No peak is selected and no detected peak is close enough to the target energy. "
+                            "Select one peak in the table or increase the tolerance."
+                        ),
+                    )
                 return
 
         self.plot.enforce_valley_size(self.valley_size.value())
