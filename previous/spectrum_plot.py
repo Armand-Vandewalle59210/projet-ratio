@@ -21,7 +21,8 @@ class SpectrumPlot(QWidget):
         self.plot.showGrid(x=True, y=True, alpha=0.25)
         self.plot.addLegend()
 
-        # Prevent PyQtGraph from displaying keV values as kkeV-scaled values.
+        # PyQtGraph normally applies SI prefixes to axis labels. For spectra this
+        # is confusing: 662 keV can appear as 0.662 kkeV. Keep the axis in keV.
         for axis_name in ("bottom", "left"):
             axis = self.plot.getAxis(axis_name)
             if hasattr(axis, "enableAutoSIPrefix"):
@@ -38,20 +39,15 @@ class SpectrumPlot(QWidget):
         self.all_peak_items: list[pg.GraphicsObject] = []
         self.log_mode = False
         self.show_all_peaks = False
-        self._updating_regions = False
 
         self.lower_region = pg.LinearRegionItem(values=[631.0, 649.0], brush=(80, 150, 255, 45))
         self.upper_region = pg.LinearRegionItem(values=[672.0, 690.0], brush=(255, 160, 60, 45))
         self.lower_region.setZValue(10)
         self.upper_region.setZValue(10)
-        self.lower_region.sigRegionChanged.connect(self._region_changed)
-        self.upper_region.sigRegionChanged.connect(self._region_changed)
+        self.lower_region.sigRegionChanged.connect(self.valley_regions_changed.emit)
+        self.upper_region.sigRegionChanged.connect(self.valley_regions_changed.emit)
         self.plot.addItem(self.lower_region)
         self.plot.addItem(self.upper_region)
-
-    def _region_changed(self) -> None:
-        if not self._updating_regions:
-            self.valley_regions_changed.emit()
 
     def set_log_mode(self, enabled: bool) -> None:
         self.log_mode = bool(enabled)
@@ -90,8 +86,9 @@ class SpectrumPlot(QWidget):
     def set_peaks(self, peaks: list[Peak], selected_peak: Peak | None = None) -> None:
         """Update peak indicators.
 
-        By default only the selected peak is drawn. If show_all_peaks is enabled,
-        all detected peaks are drawn as thin grey vertical guide lines.
+        To avoid visual clutter, only the selected peak is shown by default. If
+        show_all_peaks is enabled, all peaks are drawn as thin grey vertical
+        guide lines instead of red triangles scattered across the plot.
         """
         self.clear_peak_indicators()
 
@@ -156,6 +153,7 @@ class SpectrumPlot(QWidget):
             self.plot.removeItem(self.selected_peak_marker)
             self.selected_peak_marker = None
 
+    # Backward-compatible name used by the first version of main_window.py.
     def clear_peaks(self) -> None:
         self.clear_peak_indicators()
 
@@ -167,41 +165,12 @@ class SpectrumPlot(QWidget):
         a, b = self.upper_region.getRegion()
         return float(a), float(b)
 
-    def set_region_defaults_for_peak(
-        self,
-        peak_energy: float,
-        valley_size: float = 18.0,
-        lower_gap: float = 12.0,
-        upper_gap: float = 10.0,
-    ) -> None:
-        """Place equal-width valley regions around a selected peak."""
-        e = float(peak_energy)
-        size = max(float(valley_size), 0.1)
-        self._updating_regions = True
-        try:
-            self.lower_region.setRegion((e - lower_gap - size, e - lower_gap))
-            self.upper_region.setRegion((e + upper_gap, e + upper_gap + size))
-        finally:
-            self._updating_regions = False
-        self.valley_regions_changed.emit()
+    def set_region_defaults_for_peak(self, peak_energy: float) -> None:
+        """Place valley regions around a selected peak.
 
-    
-    def enforce_valley_size(self, valley_size: float) -> None:
-        """Force both valley ROIs to have the same width without emitting signals.
-
-        This method must stay silent. If this emits valley_regions_changed,
-        the application can enter a recursive loop:
-
-        region changed -> calculate -> enforce size -> region changed -> calculate ...
+        The offsets mimic the earlier Cs-137 example: roughly -30 to -12 keV and
+        +10 to +28 keV around 661.6 keV.
         """
-        size = max(float(valley_size), 0.1)
-        lower_min, lower_max = sorted(self.lower_region.getRegion())
-        upper_min, upper_max = sorted(self.upper_region.getRegion())
-
-        self._updating_regions = True
-        try:
-            self.lower_region.setRegion((lower_max - size, lower_max))
-            self.upper_region.setRegion((upper_min, upper_min + size))
-        finally:
-            self._updating_regions = False
-
+        e = float(peak_energy)
+        self.lower_region.setRegion((e - 30.0, e - 12.0))
+        self.upper_region.setRegion((e + 10.0, e + 28.0))

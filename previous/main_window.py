@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -18,7 +19,6 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
-    QToolBox,
     QVBoxLayout,
     QWidget,
 )
@@ -60,13 +60,9 @@ class MainWindow(QMainWindow):
 
         self.target_energy = self._double_spin(0.0, 4000.0, 661.6, 1, " keV")
         self.tolerance = self._double_spin(0.1, 200.0, 6.0, 1, " keV")
-
-        self.valley_size = self._double_spin(0.1, 500.0, 18.0, 1, " keV")
-        self.valley_size.valueChanged.connect(self.apply_valley_size)
-
-        self.z_input = self._int_spin(0, 50, 5)
+        self.z_input = self._int_spin(0, 50, 9)
         self.w_input = self._int_spin(1, 101, 9)
-        self.sigma_factor = self._double_spin(0.1, 50.0, 2.0, 2, "")
+        self.sigma_factor = self._double_spin(0.1, 20.0, 2.0, 2, "")
         self.min_negative_width = self._int_spin(1, 100, 3)
         self.fit_half_width = self._int_spin(2, 200, 8)
         self.smooth_counts = QCheckBox("Smooth counts before transform")
@@ -122,14 +118,13 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.log_scale)
         file_layout.addWidget(self.show_all_peaks)
 
-        peak_box = QGroupBox("Peak and valley selection")
+        peak_box = QGroupBox("Peak selection")
         peak_layout = QFormLayout(peak_box)
         peak_layout.addRow("Target energy", self.target_energy)
         peak_layout.addRow("Tolerance", self.tolerance)
-        peak_layout.addRow("Valley size", self.valley_size)
 
-        mariscotti_panel = QWidget()
-        mariscotti_layout = QFormLayout(mariscotti_panel)
+        mariscotti_box = QGroupBox("Mariscotti parameters")
+        mariscotti_layout = QFormLayout(mariscotti_box)
         mariscotti_layout.addRow("z", self.z_input)
         mariscotti_layout.addRow("w", self.w_input)
         mariscotti_layout.addRow("Sigma factor", self.sigma_factor)
@@ -139,14 +134,9 @@ class MainWindow(QMainWindow):
         mariscotti_layout.addRow("SG window", self.sg_window)
         mariscotti_layout.addRow("SG polyorder", self.sg_polyorder)
 
-        advanced_box = QToolBox()
-        advanced_box.addItem(mariscotti_panel, "Mariscotti parameters")
-        advanced_box.setCurrentIndex(-1)
-        advanced_box.setToolTip("Open this section only when you need to tune peak detection.")
-
         layout.addWidget(file_box)
         layout.addWidget(peak_box)
-        layout.addWidget(advanced_box)
+        layout.addWidget(mariscotti_box)
         layout.addWidget(self.detect_button)
         layout.addWidget(self.calculate_button)
         layout.addWidget(QLabel("Detected peaks"))
@@ -200,12 +190,7 @@ class MainWindow(QMainWindow):
         self.plot.set_show_all_peak_markers(self.show_all_peaks.isChecked())
         self.plot.set_peaks(self.peaks, self.selected_peak)
 
-    def apply_valley_size(self) -> None:
-        self.plot.enforce_valley_size(self.valley_size.value())
-        self.calculate_if_possible()
-
     def detect_peaks(self) -> None:
-        """Detect all peaks without requiring a peak near the target energy."""
         if self.spectrum is None:
             self.results.setText("Load a spectrum first.")
             return
@@ -222,33 +207,16 @@ class MainWindow(QMainWindow):
                 sg_window=self.sg_window.value(),
                 sg_polyorder=self.sg_polyorder.value(),
             )
+            self.selected_peak = nearest_peak(self.peaks, self.target_energy.value(), self.tolerance.value())
         except Exception as exc:
             self._show_error("Peak detection failed", exc)
             return
 
-        self._populate_peaks_table()
-
-        # Selecting a target peak is now a convenience, not a requirement for
-        # the peak-detection step itself.
-        self.selected_peak = None
-        target_message = ""
-        try:
-            self.selected_peak = nearest_peak(self.peaks, self.target_energy.value(), self.tolerance.value())
-            self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
-            self._select_peak_row(self.selected_peak)
-            target_message = f"\nSelected nearest target peak: {self.selected_peak.peak_energy:.3f} keV."
-        except Exception:
-            target_message = (
-                f"\nNo detected peak within {self.tolerance.value():.1f} keV of "
-                f"{self.target_energy.value():.1f} keV. Select a peak in the table, "
-                "change the target energy, or adjust Mariscotti parameters."
-            )
-
         self.plot.set_peaks(self.peaks, self.selected_peak)
-        self.results.setText(f"Detected {len(self.peaks)} fitted peaks.{target_message}")
-
-        if self.selected_peak is not None:
-            self.calculate_ratio(show_errors=False)
+        self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy)
+        self._populate_peaks_table()
+        self._select_peak_row(self.selected_peak)
+        self.calculate_ratio()
 
     def _populate_peaks_table(self) -> None:
         self.peaks_table.setRowCount(len(self.peaks))
@@ -281,7 +249,7 @@ class MainWindow(QMainWindow):
         self.selected_peak = self.peaks[row]
         self.target_energy.setValue(self.selected_peak.peak_energy)
         self.plot.set_peaks(self.peaks, self.selected_peak)
-        self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
+        self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy)
         self.calculate_ratio()
 
     def calculate_if_possible(self) -> None:
@@ -292,30 +260,14 @@ class MainWindow(QMainWindow):
         if self.spectrum is None:
             self.results.setText("Load a spectrum first.")
             return
-
-        if not self.peaks:
-            if show_errors:
-                self.results.setText("Detect peaks first, then select a peak or use a valid target energy.")
-            return
-
         if self.selected_peak is None:
             try:
                 self.selected_peak = nearest_peak(self.peaks, self.target_energy.value(), self.tolerance.value())
-                self._select_peak_row(self.selected_peak)
-                self.plot.set_peaks(self.peaks, self.selected_peak)
-                self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
             except Exception as exc:
                 if show_errors:
-                    self._show_error(
-                        "No selected peak",
-                        RuntimeError(
-                            "No peak is selected and no detected peak is close enough to the target energy. "
-                            "Select one peak in the table or increase the tolerance."
-                        ),
-                    )
+                    self._show_error("No selected peak", exc)
                 return
 
-        self.plot.enforce_valley_size(self.valley_size.value())
         lower_min, lower_max = self.plot.lower_region_values()
         upper_min, upper_max = self.plot.upper_region_values()
 
@@ -338,7 +290,6 @@ class MainWindow(QMainWindow):
         self.results.setText(
             f"Selected peak: {result.peak.peak_energy:.3f} keV\n"
             f"Peak area: {result.peak.area:.3f} ± {result.peak.area_uncertainty:.3f}\n\n"
-            f"Valley size: {self.valley_size.value():.2f} keV each\n"
             f"Lower valley [{result.lower_min_energy:.2f}, {result.lower_max_energy:.2f}] keV: "
             f"{result.lower_counts:.3f} ± {result.lower_uncertainty:.3f}\n"
             f"Upper valley [{result.upper_min_energy:.2f}, {result.upper_max_energy:.2f}] keV: "
