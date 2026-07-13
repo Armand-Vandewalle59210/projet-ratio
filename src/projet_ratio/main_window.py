@@ -54,9 +54,13 @@ class MainWindow(QMainWindow):
         self.log_scale = QCheckBox("Log Y axis")
         self.log_scale.stateChanged.connect(self.toggle_log_scale)
 
+        self.show_all_peaks = QCheckBox("Show all detected peak guide lines")
+        self.show_all_peaks.setChecked(False)
+        self.show_all_peaks.stateChanged.connect(self.toggle_all_peak_markers)
+
         self.target_energy = self._double_spin(0.0, 4000.0, 661.6, 1, " keV")
         self.tolerance = self._double_spin(0.1, 200.0, 6.0, 1, " keV")
-        self.z_input = self._int_spin(0, 50, 5)
+        self.z_input = self._int_spin(0, 50, 9)
         self.w_input = self._int_spin(1, 101, 9)
         self.sigma_factor = self._double_spin(0.1, 20.0, 2.0, 2, "")
         self.min_negative_width = self._int_spin(1, 100, 3)
@@ -112,6 +116,7 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.open_button)
         file_layout.addWidget(self.file_label)
         file_layout.addWidget(self.log_scale)
+        file_layout.addWidget(self.show_all_peaks)
 
         peak_box = QGroupBox("Peak selection")
         peak_layout = QFormLayout(peak_box)
@@ -162,14 +167,28 @@ class MainWindow(QMainWindow):
         self.plot.set_spectrum(self.spectrum)
         self.peaks_table.setRowCount(0)
         live_time = "unknown" if self.spectrum.live_time is None else f"{self.spectrum.live_time:.3f} s"
-        self.file_label.setText(f"{self.spectrum.name}\nChannels: {len(self.spectrum.counts)}\nLive time: {live_time}")
+        coeffs = self.spectrum.calibration_coefficients
+        coeff_text = "none" if not coeffs else ", ".join(f"{c:.6g}" for c in coeffs)
+        e_min = float(min(self.spectrum.energy))
+        e_max = float(max(self.spectrum.energy))
+        self.file_label.setText(
+            f"{self.spectrum.name}\n"
+            f"Channels: {len(self.spectrum.counts)}\n"
+            f"Live time: {live_time}\n"
+            f"Energy range: {e_min:.2f} - {e_max:.2f} keV\n"
+            f"Calibration: {coeff_text}"
+        )
         self.results.setText("Spectrum loaded. Click 'Detect peaks'.")
 
     def toggle_log_scale(self) -> None:
         self.plot.set_log_mode(self.log_scale.isChecked())
         if self.spectrum is not None:
             self.plot.set_spectrum(self.spectrum)
-            self.plot.set_peaks(self.peaks)
+            self.plot.set_peaks(self.peaks, self.selected_peak)
+
+    def toggle_all_peak_markers(self) -> None:
+        self.plot.set_show_all_peak_markers(self.show_all_peaks.isChecked())
+        self.plot.set_peaks(self.peaks, self.selected_peak)
 
     def detect_peaks(self) -> None:
         if self.spectrum is None:
@@ -193,9 +212,10 @@ class MainWindow(QMainWindow):
             self._show_error("Peak detection failed", exc)
             return
 
-        self.plot.set_peaks(self.peaks)
+        self.plot.set_peaks(self.peaks, self.selected_peak)
         self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy)
         self._populate_peaks_table()
+        self._select_peak_row(self.selected_peak)
         self.calculate_ratio()
 
     def _populate_peaks_table(self) -> None:
@@ -214,11 +234,21 @@ class MainWindow(QMainWindow):
                 self.peaks_table.setItem(row, col, item)
         self.peaks_table.resizeColumnsToContents()
 
+    def _select_peak_row(self, peak: Peak | None) -> None:
+        if peak is None:
+            return
+        for row, candidate in enumerate(self.peaks):
+            if candidate.index == peak.index:
+                self.peaks_table.selectRow(row)
+                self.peaks_table.scrollToItem(self.peaks_table.item(row, 0))
+                return
+
     def select_peak_from_table(self, row: int, column: int) -> None:
         if row < 0 or row >= len(self.peaks):
             return
         self.selected_peak = self.peaks[row]
         self.target_energy.setValue(self.selected_peak.peak_energy)
+        self.plot.set_peaks(self.peaks, self.selected_peak)
         self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy)
         self.calculate_ratio()
 

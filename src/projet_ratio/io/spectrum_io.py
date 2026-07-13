@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import csv
+import re
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
-import pandas as pd
 
 from projet_ratio.models import Spectrum
 
 
-def _as_float_array(values: Iterable[float]) -> np.ndarray:
-    return np.asarray(list(values), dtype=float)
+AXIS_NAME_PATTERNS = (
+    "energy", "energie", "kev", "channel", "chan", "ch", "x", "bin"
+)
+
+# The entries are deliberately broad. Examples matched here include:
+# Counts, count, Count_1000s, Smeared_at_1000s, N, cps, counts_per_s, etc.
+COUNTS_NAME_PATTERNS = (
+    "smeared", "count", "counts", "cnt", "cps", "peak", "peaks", "spectrum", "y", "n"
+)
+
+ENERGY_NAME_PATTERNS = ("energy", "energie", "kev", "e_kev")
+CHANNEL_NAME_PATTERNS = ("channel", "channels", "chan", "ch", "bin")
 
 
 def _energy_from_coefficients(channels: np.ndarray, coefficients: Iterable[float] | None) -> np.ndarray:
@@ -23,7 +34,7 @@ def _energy_from_coefficients(channels: np.ndarray, coefficients: Iterable[float
     if coefficients is None:
         return channels.copy()
 
-    coeffs = list(float(c) for c in coefficients)
+    coeffs = [float(c) for c in coefficients]
     if not coeffs:
         return channels.copy()
 
@@ -33,51 +44,139 @@ def _energy_from_coefficients(channels: np.ndarray, coefficients: Iterable[float
     return energy
 
 
-def _read_csv(path: Path) -> Spectrum:
-    """Read a flexible CSV spectrum.
+def _normalize_name(name: str) -> str:
+    """Normalize a CSV header for robust matching."""
+    return re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower()).strip("_")
 
-    Supported column patterns:
-    - counts only: one numeric column
-    - channel/counts: columns named like channel and counts
-    - energy/counts: columns named like energy and counts
-    - channel/energy/counts: all three columns
+
+def _name_contains_any(name: str, patterns: tuple[str, ...]) -> bool:
+    normalized = _normalize_name(name)
+    tokens = set(normalized.split("_"))
+    for pattern in patterns:
+        p = _normalize_name(pattern)
+        if p in tokens or p in normalized:
+            return True
+    return False
+
+
+def _score_counts_column(header: str, index: int, numeric_count: int) -> float:
+    """Rank likely counts columns while avoiding energy/channel columns."""
+    name = _normalize_name(header)
+    score = float(numeric_count)
+
+    if _name_contains_any(name, COUNTS_NAME_PATTERNS):
+        score += 10_000
+    if _name_contains_any(name, ("count", "counts", "cnt", "cps")):
+        score += 20_000
+    if _name_contains_any(name, ("smeared", "spectrum")):
+        score += 8_000
+    if _name_contains_any(name, AXIS_NAME_PATTERNS):
+        score -= 15_000
+
+    # If there is no useful name, prefer later numeric columns over the first
+    # column, because the first column is often channel or energy.
+    score += index * 0.01
+    return score
+
+
+def _read_csv(path: Path) -> Spectrum:
+    """Read a flexible CSV spectrum without importing pandas.
+
+    Supported examples:
+    - one numeric column: interpreted as counts
+    - Energy_keV / Counts
+    - channel / count_1000s
+    - x / Smeared_at_1000s
+    - any numeric column containing count, counts, cnt, cps, smeared, spectrum, y, etc.
     """
-    df = pd.read_csv(path)
-    if df.empty:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        sample = handle.read(4096)
+        handle.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+        except csv.Error:
+            dialect = csv.excel
+        rows = [row for row in csv.reader(handle, dialect) if row and any(cell.strip() for cell in row)]
+
+    if not rows:
         raise ValueError("CSV file is empty.")
 
-    normalized = {str(c).strip().lower(): c for c in df.columns}
+    def to_float(cell: str) -> float:
+        cell = cell.strip().replace(" ", "")
+        # Support decimal comma when it is not also used as a delimiter.
+        cell = cell.replace(",", ".")
+        return float(cell)
 
-    def find_column(names: tuple[str, ...]) -> str | None:
-        for candidate in names:
-            for lower_name, original_name in normalized.items():
-                if candidate in lower_name:
-                    return original_name
+    def row_is_numeric(row: list[str]) -> bool:
+        try:
+            [to_float(cell) for cell in row if cell.strip()]
+            return True
+        except ValueError:
+            return False
+
+    has_header = not row_is_numeric(rows[0])
+    if has_header:
+        headers = [cell.strip() for cell in rows[0]]
+        data_rows = rows[1:]
+    else:
+        width = max(len(row) for row in rows)
+        headers = [f"column_{i}" for i in range(width)]
+        data_rows = rows
+
+    width = len(headers)
+    numeric_columns: list[list[float]] = [[] for _ in range(width)]
+    for row in data_rows:
+        for index in range(width):
+            if index >= len(row):
+                numeric_columns[index].append(float("nan"))
+                continue
+            try:
+                numeric_columns[index].append(to_float(row[index]))
+            except ValueError:
+                numeric_columns[index].append(float("nan"))
+
+    numeric_counts = [int(np.isfinite(np.asarray(col, dtype=float)).sum()) for col in numeric_columns]
+    valid_indices = [i for i, n in enumerate(numeric_counts) if n > 0]
+    if not valid_indices:
+        raise ValueError("CSV file must contain at least one numeric column.")
+
+    def first_named_column(patterns: tuple[str, ...]) -> int | None:
+        for index, header in enumerate(headers):
+            if index in valid_indices and _name_contains_any(header, patterns):
+                return index
         return None
 
-    counts_col = find_column(("counts", "count", "cnt", "cps"))
-    channel_col = find_column(("channel", "chan", "ch"))
-    energy_col = find_column(("energy", "kev", "energie"))
+    energy_index = first_named_column(ENERGY_NAME_PATTERNS)
+    channel_index = first_named_column(CHANNEL_NAME_PATTERNS)
 
-    numeric_df = df.select_dtypes(include=["number"])
-    if counts_col is None:
-        if numeric_df.shape[1] == 0:
-            raise ValueError("CSV file must contain at least one numeric counts column.")
-        counts_col = numeric_df.columns[-1]
+    # Pick the best counts column using names and numeric availability.
+    candidate_indices = [i for i in valid_indices if i not in {energy_index, channel_index}]
+    if not candidate_indices:
+        candidate_indices = valid_indices
 
-    counts = np.asarray(df[counts_col], dtype=float)
+    counts_index = max(
+        candidate_indices,
+        key=lambda i: _score_counts_column(headers[i], i, numeric_counts[i]),
+    )
 
-    if channel_col is not None:
-        channels = np.asarray(df[channel_col], dtype=float)
+    counts_all = np.asarray(numeric_columns[counts_index], dtype=float)
+    finite_mask = np.isfinite(counts_all)
+    if not np.any(finite_mask):
+        raise ValueError("Counts column does not contain numeric data.")
+
+    counts = np.nan_to_num(counts_all[finite_mask], nan=0.0)
+
+    if channel_index is not None and channel_index < len(numeric_columns):
+        channels = np.asarray(numeric_columns[channel_index], dtype=float)[finite_mask]
     else:
         channels = np.arange(len(counts), dtype=float)
 
-    if energy_col is not None:
-        energy = np.asarray(df[energy_col], dtype=float)
-        coeffs = None
+    if energy_index is not None and energy_index < len(numeric_columns):
+        energy = np.asarray(numeric_columns[energy_index], dtype=float)[finite_mask]
+        calibration_coefficients = None
     else:
         energy = channels.copy()
-        coeffs = None
+        calibration_coefficients = None
 
     return Spectrum(
         counts=counts,
@@ -85,17 +184,30 @@ def _read_csv(path: Path) -> Spectrum:
         energy=energy,
         live_time=None,
         path=path,
-        calibration_coefficients=coeffs,
-        metadata={"reader": "csv", "counts_column": str(counts_col)},
+        calibration_coefficients=calibration_coefficients,
+        metadata={
+            "reader": "csv",
+            "counts_column": headers[counts_index],
+            "energy_column": None if energy_index is None else headers[energy_index],
+            "channel_column": None if channel_index is None else headers[channel_index],
+        },
     )
 
 
-def _read_with_specutils(path: Path) -> Spectrum:
-    """Read CNF/N42/XML through the local SpecUtils module.
+def _call_first_available(obj, names: tuple[str, ...]):
+    """Try several method/property names used by different SpecUtils builds."""
+    for name in names:
+        value = getattr(obj, name, None)
+        if value is None:
+            continue
+        if callable(value):
+            return value()
+        return value
+    return None
 
-    This keeps SpecUtils optional: the app can still open CSV files on systems
-    where SpecUtils is not installed.
-    """
+
+def _read_with_specutils(path: Path) -> Spectrum:
+    """Read CNF/N42/XML through SpecUtils and use embedded calibration when present."""
     try:
         import SpecUtils  # type: ignore
     except ImportError as exc:
@@ -112,59 +224,57 @@ def _read_with_specutils(path: Path) -> Spectrum:
 
     measurement = measurements[0]
 
-    # SpecUtils Python bindings can differ slightly between builds, so use a
-    # defensive sequence of common method/property names.
-    counts = None
-    for name in ("gamma_counts", "gammaCounts", "counts"):
-        value = getattr(measurement, name, None)
-        if callable(value):
-            counts = value()
-            break
-        if value is not None:
-            counts = value
-            break
-
+    counts = _call_first_available(
+        measurement,
+        ("gammaCounts", "gamma_counts", "counts", "channelCounts", "channel_counts"),
+    )
     if counts is None:
         raise AttributeError("Could not extract counts from SpecUtils measurement.")
 
-    counts = np.asarray(counts, dtype=float)
+    counts = np.asarray(list(counts), dtype=float)
     channels = np.arange(len(counts), dtype=float)
 
-    live_time = None
-    for name in ("live_time", "liveTime", "gamma_live_time"):
-        value = getattr(measurement, name, None)
-        if callable(value):
-            live_time = float(value())
-            break
-        if value is not None:
-            live_time = float(value)
-            break
+    live_time = _call_first_available(
+        measurement,
+        ("liveTime", "live_time", "gammaLiveTime", "gamma_live_time", "realTime"),
+    )
+    live_time = None if live_time is None else float(live_time)
 
-    coeffs = None
-    calibration = getattr(measurement, "energy_calibration", None)
-    if callable(calibration):
-        calibration = calibration()
+    # This is the important fix for your files: your earlier Spectrum_io code
+    # used meas.calibrationCoeffs(), so the clean app must try that first too.
+    coeffs = _call_first_available(
+        measurement,
+        ("calibrationCoeffs", "calibration_coeffs", "energyCalibrationCoeffs", "energy_calibration_coeffs"),
+    )
 
-    if calibration is not None:
-        for name in ("coefficients", "coeffs", "polynomial_coefficients"):
-            value = getattr(calibration, name, None)
-            if callable(value):
-                coeffs = tuple(float(c) for c in value())
-                break
-            if value is not None:
-                coeffs = tuple(float(c) for c in value)
-                break
+    if coeffs is not None:
+        try:
+            coeffs = tuple(float(c) for c in coeffs)
+        except TypeError:
+            coeffs = None
 
-    # Fallback: some SpecUtils versions expose channel_energies directly.
-    energy = None
-    for name in ("channel_energies", "energies"):
-        value = getattr(measurement, name, None)
-        if callable(value):
-            energy = np.asarray(value(), dtype=float)
-            break
-        if value is not None:
-            energy = np.asarray(value, dtype=float)
-            break
+    # Some bindings expose a calibration object instead of calibrationCoeffs().
+    if coeffs is None:
+        calibration = _call_first_available(measurement, ("energy_calibration", "energyCalibration", "calibration"))
+        if calibration is not None:
+            coeffs = _call_first_available(
+                calibration,
+                ("coefficients", "coeffs", "polynomial_coefficients", "calibrationCoeffs"),
+            )
+            if coeffs is not None:
+                try:
+                    coeffs = tuple(float(c) for c in coeffs)
+                except TypeError:
+                    coeffs = None
+
+    # If SpecUtils can directly provide channel energies, use them. Otherwise
+    # compute energy from calibration coefficients.
+    energy = _call_first_available(
+        measurement,
+        ("channelEnergies", "channel_energies", "energies", "gammaChannelEnergies"),
+    )
+    if energy is not None:
+        energy = np.asarray(list(energy), dtype=float)
 
     if energy is None or len(energy) != len(counts):
         energy = _energy_from_coefficients(channels, coeffs)
@@ -176,7 +286,7 @@ def _read_with_specutils(path: Path) -> Spectrum:
         live_time=live_time,
         path=path,
         calibration_coefficients=coeffs,
-        metadata={"reader": "SpecUtils"},
+        metadata={"reader": "SpecUtils", "calibration_coefficients": coeffs},
     )
 
 
