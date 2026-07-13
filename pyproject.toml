@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "projet-ratio"
+version = "0.1.0"
+description = "Peak-to-valley gamma spectrometry desktop application"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "PySide6",
+    "pyqtgraph",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
