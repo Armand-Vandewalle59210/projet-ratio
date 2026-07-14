@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 from scipy.optimize import curve_fit
-from scipy.signal import savgol_filter
+
 
 from projet_ratio.models import Peak, Spectrum
 
@@ -98,10 +98,13 @@ def find_candidates_strict(
         raise ValueError("counts and axis must have the same length")
 
     if smooth_counts:
-        params = _sanitize_savgol_window(sg_window, sg_polyorder, len(counts))
-        counts_for_transform = savgol_filter(counts, *params) if params is not None else counts
+        smoothing_window = max(3, int(sg_window))
+        if smoothing_window % 2 == 0:
+            smoothing_window += 1
+        counts_for_transform = _moving_average(counts, smoothing_window)
     else:
         counts_for_transform = counts
+
 
     transform, _raw = mariscotti_transform(counts_for_transform, z=z, w=w)
     sigma_t = _robust_sigma(transform)
