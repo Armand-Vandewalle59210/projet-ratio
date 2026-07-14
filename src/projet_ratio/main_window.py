@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -28,6 +29,11 @@ from projet_ratio.io.spectrum_io import load_spectrum
 from projet_ratio.models import Peak, Spectrum
 from projet_ratio.ui.spectrum_plot import SpectrumPlot
 
+from projet_ratio.analysis.depth import (
+    calculate_point_source_depth,
+    calculate_uniform_contamination_depth,
+)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -37,7 +43,7 @@ class MainWindow(QMainWindow):
         self.spectrum: Spectrum | None = None
         self.peaks: list[Peak] = []
         self.selected_peak: Peak | None = None
-
+        self.last_ratio_result = None
         self.plot = SpectrumPlot()
         self.plot.valley_regions_changed.connect(self.calculate_if_possible)
 
@@ -62,6 +68,19 @@ class MainWindow(QMainWindow):
 
         self.valley_size = self._double_spin(0.1, 500.0, 18.0, 1, " keV")
         self.valley_size.valueChanged.connect(self.apply_valley_size)
+
+        self.depth_model = QComboBox()
+        self.depth_model.addItems([
+            "Point source / finite depth",
+            "Uniform contamination layer",
+        ])
+
+        self.k_input = self._double_spin(1e-12, 1.0, 2.26e-3, 6, " 1/keV")
+        self.mu_input = self._double_spin(1e-12, 10.0, 7.85e-2, 6, " cm²/g")
+        self.density_input = self._double_spin(1e-12, 50.0, 3.5, 4, " g/cm³")
+
+        self.calculate_depth_button = QPushButton("Calculate depth")
+        self.calculate_depth_button.clicked.connect(self.calculate_depth)
 
         self.z_input = self._int_spin(0, 50, 5)
         self.w_input = self._int_spin(1, 101, 9)
@@ -127,7 +146,15 @@ class MainWindow(QMainWindow):
         peak_layout.addRow("Tolerance", self.tolerance)
         peak_layout.addRow("Valley size", self.valley_size)
 
-        mariscotti_box = QGroupBox("Mariscotti parameters")
+        depth_box = QGroupBox("Depth calculation")
+        depth_layout = QFormLayout(depth_box)
+        depth_layout.addRow("Model", self.depth_model)
+        depth_layout.addRow("k", self.k_input)
+        depth_layout.addRow("μ", self.mu_input)
+        depth_layout.addRow("Density ρ", self.density_input)
+        depth_layout.addRow(self.calculate_depth_button)
+
+        mariscotti_box = QGroupBox("Peak parameters")
         mariscotti_box.setCheckable(True)
         mariscotti_box.setChecked(False)
         mariscotti_outer_layout = QVBoxLayout(mariscotti_box)
@@ -149,6 +176,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(file_box)
         layout.addWidget(peak_box)
+        layout.addWidget(depth_box)
         layout.addWidget(mariscotti_box)
         layout.addWidget(self.detect_button)
         layout.addWidget(self.calculate_button)
@@ -330,6 +358,7 @@ class MainWindow(QMainWindow):
                 upper_min,
                 upper_max,
             )
+            self.last_ratio_result = result
         except Exception as exc:
             if show_errors:
                 self._show_error("Calculation failed", exc)
@@ -348,6 +377,66 @@ class MainWindow(QMainWindow):
             f"Valley discontinuity: {result.valley_counts:.3f} ± {result.valley_uncertainty:.3f}\n"
             f"Peak-to-valley ratio: {result.ratio:.6g} ± {result.ratio_uncertainty:.3g}\n"
             f"Acceptability lower/upper ≥ 2: {result.acceptable}"
+        )
+    def calculate_depth(self) -> None:
+        """Calculate depth from the latest peak-to-valley result."""
+        if self.last_ratio_result is None:
+            self.calculate_ratio(show_errors=False)
+
+        if self.last_ratio_result is None:
+            self.results.setText(
+                "Calculate the peak-to-valley ratio first. Depth needs a valid ratio result."
+            )
+            return
+
+        result = self.last_ratio_result
+
+        # Your app ratio is Q = peak / valley.
+        q_peak_over_valley = float(result.ratio)
+
+        # The theory uses R = valley / peak.
+        discontinuity_over_peak = 1.0 / q_peak_over_valley
+        sigma_discontinuity_over_peak = result.ratio_uncertainty / (q_peak_over_valley**2)
+
+        k = self.k_input.value()
+        mu = self.mu_input.value()
+        density = self.density_input.value()
+
+        try:
+            if self.depth_model.currentIndex() == 0:
+                depth, depth_uncertainty = calculate_point_source_depth(
+                    peak_to_valley_ratio=q_peak_over_valley,
+                    peak_to_valley_uncertainty=result.ratio_uncertainty,
+                    k=k,
+                    mu=mu,
+                    density=density,
+                )
+                model_name = "Point source / finite depth"
+            else:
+                depth, depth_uncertainty = calculate_uniform_contamination_depth(
+                    discontinuity_to_peak_ratio=discontinuity_over_peak,
+                    discontinuity_to_peak_uncertainty=sigma_discontinuity_over_peak,
+                    k=k,
+                    mu=mu,
+                    density=density,
+                )
+                model_name = "Uniform contamination layer"
+
+        except Exception as exc:
+            self._show_error("Depth calculation failed", exc)
+            return
+
+        previous = self.results.toPlainText().rstrip()
+
+        self.results.setText(
+            previous
+            + "\n\n"
+            + f"Depth model: {model_name}\n"
+            + f"Discontinuity/peak ratio: {discontinuity_over_peak:.6g} ± {sigma_discontinuity_over_peak:.3g}\n"
+            + f"k: {k:.6g} 1/keV\n"
+            + f"μ: {mu:.6g} cm²/g\n"
+            + f"ρ: {density:.6g} g/cm³\n"
+            + f"Depth: {depth:.6g} ± {depth_uncertainty:.3g} cm"
         )
 
     def _show_error(self, title: str, exc: Exception) -> None:
