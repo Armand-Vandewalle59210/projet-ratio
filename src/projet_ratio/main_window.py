@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -132,7 +133,8 @@ class MainWindow(QMainWindow):
     def _build_controls(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
         file_box = QGroupBox("File")
         file_layout = QVBoxLayout(file_box)
         file_layout.addWidget(self.open_button)
@@ -176,15 +178,26 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(file_box)
         layout.addWidget(peak_box)
-        layout.addWidget(depth_box)
         layout.addWidget(mariscotti_box)
         layout.addWidget(self.detect_button)
         layout.addWidget(self.calculate_button)
         layout.addWidget(QLabel("Detected peaks"))
         layout.addWidget(self.peaks_table)
+        layout.addWidget(depth_box)
         layout.addWidget(QLabel("Results"))
         layout.addWidget(self.results)
-        return panel
+        layout.addStretch(1)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(panel)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Keep the left panel usable but not ridiculously wide.
+        scroll_area.setMinimumWidth(390)
+        scroll_area.setMaximumWidth(480)
+
+        return scroll_area
+
 
     def open_spectrum(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
