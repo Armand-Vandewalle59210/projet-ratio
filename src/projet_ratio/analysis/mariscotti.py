@@ -11,6 +11,7 @@ from projet_ratio.models import Peak, Spectrum
 
 
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
+    """Centered moving average with edge padding."""
     values = np.asarray(values, dtype=float)
     window = max(1, int(window))
     if window % 2 == 0:
@@ -24,6 +25,7 @@ def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
 
 
 def _robust_sigma(values: np.ndarray) -> float:
+    """Robust global sigma estimate from MAD."""
     values = np.asarray(values, dtype=float)
     median = np.median(values)
     mad = np.median(np.abs(values - median))
@@ -35,155 +37,233 @@ def _robust_sigma(values: np.ndarray) -> float:
     return float(sigma)
 
 
-def _sanitize_savgol_window(window: int, polyorder: int, n: int) -> tuple[int, int]:
-    if n < 5:
-        return 1, 0
-    window = max(3, int(window))
-    if window % 2 == 0:
-        window += 1
-    if window >= n:
-        window = n - 1 if n % 2 == 0 else n
-    if window % 2 == 0:
-        window -= 1
-    polyorder = max(1, min(int(polyorder), window - 1))
-    return window, polyorder
+def mariscotti_transform(counts: np.ndarray, z: int = 5, w: int = 5) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the smoothed second-difference transform.
 
-
-def mariscotti_transform(counts: np.ndarray, z: int = 5, w: int = 5) -> np.ndarray:
-    """Simplified Mariscotti transform based on a smoothed second difference."""
+    This follows the practical implementation used in your original documented
+    script: first compute the second difference, then smooth it z times with an
+    odd moving-average window w.
+    """
     counts = np.asarray(counts, dtype=float)
-    second = np.zeros_like(counts, dtype=float)
-    if len(counts) >= 3:
-        second[1:-1] = counts[:-2] - 2.0 * counts[1:-1] + counts[2:]
-        second[0] = second[1]
-        second[-1] = second[-2]
+    if counts.ndim != 1:
+        raise ValueError("counts must be a 1D array")
+    if len(counts) < 3:
+        raw = np.zeros_like(counts, dtype=float)
+        return raw.copy(), raw
 
-    transformed = second
+    raw = np.zeros_like(counts, dtype=float)
+    raw[1:-1] = counts[2:] - 2.0 * counts[1:-1] + counts[:-2]
+
+    transform = raw.copy()
     for _ in range(max(0, int(z))):
-        transformed = _moving_average(transformed, int(w))
-    return transformed
+        transform = _moving_average(transform, int(w))
+
+    return transform, raw
 
 
-def find_candidates(
+def _sanitize_savgol_window(window: int, polyorder: int, n: int) -> tuple[int, int] | None:
+    """Return a valid Savitzky-Golay window/polyorder pair, or None if unusable."""
+    if n < 5:
+        return None
+    win = min(max(5, int(window) | 1), n if n % 2 == 1 else n - 1)
+    if win < 5:
+        return None
+    poly = min(int(polyorder), win - 1)
+    if win <= poly:
+        return None
+    return win, poly
+
+
+def find_candidates_strict(
     counts: np.ndarray,
+    axis: np.ndarray,
     z: int = 5,
-    w: int = 5,
+    w: int = 9,
     sigma_factor: float = 2.0,
     min_negative_width: int = 3,
     smooth_counts: bool = True,
     sg_window: int = 9,
     sg_polyorder: int = 3,
 ) -> tuple[list[dict[str, Any]], np.ndarray, float]:
+    """Find peak candidates using a stricter Mariscotti-like lobe rule.
+
+    A candidate must contain a significant positive lobe, followed by a
+    significant negative lobe, followed by a significant positive lobe. This is
+    much closer to the original Mariscotti peak-recognition idea than accepting
+    every negative region of the second-difference transform.
+    """
     counts = np.asarray(counts, dtype=float)
-    working = counts.copy()
+    axis = np.asarray(axis, dtype=float)
+    if len(counts) != len(axis):
+        raise ValueError("counts and axis must have the same length")
 
     if smooth_counts:
-        window, polyorder = _sanitize_savgol_window(sg_window, sg_polyorder, len(working))
-        if window > 1:
-            working = savgol_filter(working, window, polyorder)
+        params = _sanitize_savgol_window(sg_window, sg_polyorder, len(counts))
+        counts_for_transform = savgol_filter(counts, *params) if params is not None else counts
+    else:
+        counts_for_transform = counts
 
-    transform = mariscotti_transform(working, z=z, w=w)
-    sigma = _robust_sigma(transform)
-    threshold = -abs(float(sigma_factor)) * sigma
+    transform, _raw = mariscotti_transform(counts_for_transform, z=z, w=w)
+    sigma_t = _robust_sigma(transform)
+    threshold = float(sigma_factor) * sigma_t
 
+    sign = np.sign(transform)
+    sign[np.abs(transform) < threshold] = 0
+
+    n = len(transform)
     candidates: list[dict[str, Any]] = []
-    in_region = False
-    start = 0
+    i = 1
 
-    for i, value in enumerate(transform):
-        if value < threshold and not in_region:
-            start = i
-            in_region = True
-        elif value >= threshold and in_region:
-            end = i - 1
-            if end - start + 1 >= int(min_negative_width):
-                local = transform[start : end + 1]
-                center = start + int(np.argmin(local))
-                candidates.append({"left_index": start, "right_index": end, "center_index": center})
-            in_region = False
+    while i < n - 1:
+        # First positive side lobe.
+        if sign[i] <= 0:
+            i += 1
+            continue
+        p1_start = i
+        while i < n - 1 and sign[i] > 0:
+            i += 1
+        p1_end = i - 1
 
-    if in_region:
-        end = len(transform) - 1
-        if end - start + 1 >= int(min_negative_width):
-            local = transform[start : end + 1]
-            center = start + int(np.argmin(local))
-            candidates.append({"left_index": start, "right_index": end, "center_index": center})
+        # Central negative lobe.
+        if i >= n - 1 or sign[i] >= 0:
+            continue
+        n_start = i
+        while i < n - 1 and sign[i] < 0:
+            i += 1
+        n_end = i - 1
 
-    return candidates, transform, sigma
+        # Second positive side lobe.
+        if i >= n - 1 or sign[i] <= 0:
+            continue
+        p2_start = i
+        while i < n - 1 and sign[i] > 0:
+            i += 1
+        p2_end = i - 1
+
+        negative_width = n_end - n_start + 1
+        if negative_width < int(min_negative_width):
+            continue
+
+        p1_max = float(np.max(transform[p1_start:p1_end + 1])) if p1_end >= p1_start else 0.0
+        p2_max = float(np.max(transform[p2_start:p2_end + 1])) if p2_end >= p2_start else 0.0
+        n_min = float(np.min(transform[n_start:n_end + 1])) if n_end >= n_start else 0.0
+
+        if p1_max < threshold or p2_max < threshold or -n_min < threshold:
+            continue
+
+        center_idx = int(np.argmin(transform[n_start:n_end + 1]) + n_start)
+        left_idx = max(0, p1_start)
+        right_idx = min(n - 1, p2_end)
+
+        candidates.append(
+            {
+                "left_idx": left_idx,
+                "right_idx": right_idx,
+                "center_idx": center_idx,
+                "left_value": float(axis[left_idx]),
+                "right_value": float(axis[right_idx]),
+                "center_value": float(axis[center_idx]),
+                "negative_width": int(negative_width),
+                "p1_max": p1_max,
+                "p2_max": p2_max,
+                "n_min": n_min,
+            }
+        )
+
+    return candidates, transform, sigma_t
 
 
 def _gaussian_with_linear_background(x, amplitude, mu, sigma, b0, b1):
-    sigma = np.maximum(np.abs(sigma), 1e-12)
     return amplitude * np.exp(-0.5 * ((x - mu) / sigma) ** 2) + b0 + b1 * x
 
 
-def _interp_energy(spectrum: Spectrum, channel_position: float) -> float:
-    return float(np.interp(channel_position, spectrum.channels, spectrum.energy))
+def _energy_to_channel(spectrum: Spectrum, energy_position: float) -> float:
+    return float(np.interp(float(energy_position), spectrum.energy, spectrum.channels))
 
 
-def _fit_candidate(spectrum: Spectrum, candidate: dict[str, Any], fit_half_width: int) -> Peak | None:
-    counts = spectrum.counts
-    channels = spectrum.channels
-    center = int(candidate["center_index"])
-    left = max(0, center - int(fit_half_width))
-    right = min(len(counts) - 1, center + int(fit_half_width))
+def _fit_candidate_on_energy_axis(
+    spectrum: Spectrum,
+    candidate: dict[str, Any],
+    fit_half_width: int = 8,
+) -> Peak | None:
+    """Fit one candidate with x expressed in calibrated energy, not channel."""
+    counts = np.asarray(spectrum.counts, dtype=float)
+    energy = np.asarray(spectrum.energy, dtype=float)
 
-    if right - left + 1 < 5:
+    c = int(candidate["center_idx"])
+    left = max(0, c - int(fit_half_width))
+    right = min(len(counts) - 1, c + int(fit_half_width))
+
+    x = energy[left:right + 1]
+    y = counts[left:right + 1]
+    if len(x) < 5:
         return None
 
-    x = np.asarray(channels[left : right + 1], dtype=float)
-    y = np.asarray(counts[left : right + 1], dtype=float)
+    baseline = 0.5 * (counts[left] + counts[right])
+    amplitude0 = max(1.0, counts[c] - baseline)
+    mu0 = float(energy[c])
+    sigma0 = max(0.3, float(abs(x[-1] - x[0])) / 6.0)
+    b0_0 = baseline
+    b1_0 = 0.0
 
-    edge_background = float(np.median(np.r_[y[:2], y[-2:]]))
-    amplitude0 = max(float(y.max() - edge_background), 1.0)
-    mu0 = float(channels[center])
-    sigma0 = max((float(x.max() - x.min()) / 6.0), 1.0)
-    b0 = edge_background
-    b1 = 0.0
-
+    # Bounds are deliberately kept. Without bounds the optimizer can push the
+    # centroid outside the local peak window or inflate sigma, which changes the
+    # fitted area and therefore the peak-to-valley ratio dramatically.
     try:
         popt, pcov = curve_fit(
             _gaussian_with_linear_background,
             x,
             y,
-            p0=[amplitude0, mu0, sigma0, b0, b1],
+            p0=[amplitude0, mu0, sigma0, b0_0, b1_0],
+            bounds=(
+                [0.0, float(np.min(x)), 0.3, -np.inf, -np.inf],
+                [np.inf, float(np.max(x)), np.inf, np.inf, np.inf],
+            ),
             maxfev=10000,
         )
     except Exception:
         return None
 
-    amplitude, mu, sigma, b0, b1 = [float(v) for v in popt]
-    sigma = abs(sigma)
-    if amplitude <= 0 or sigma <= 0 or not np.isfinite(mu):
+    amplitude, peak_energy, sigma_energy, b0, b1 = [float(v) for v in popt]
+    if amplitude <= 0 or sigma_energy <= 0 or not np.isfinite(peak_energy):
         return None
 
-    perr = np.sqrt(np.diag(pcov)) if pcov is not None and np.all(np.isfinite(pcov)) else np.full(5, np.nan)
-    amplitude_unc = float(perr[0]) if np.isfinite(perr[0]) else math.sqrt(abs(amplitude))
-    sigma_unc = float(perr[2]) if np.isfinite(perr[2]) else 0.0
+    area = float(amplitude * sigma_energy * math.sqrt(2.0 * math.pi))
+    fwhm_energy = float(2.354820045 * sigma_energy)
+    left_energy = float(peak_energy - fwhm_energy / 2.0)
+    right_energy = float(peak_energy + fwhm_energy / 2.0)
 
-    area = float(amplitude * sigma * math.sqrt(2.0 * math.pi))
-    area_unc = area * math.sqrt(
-        (amplitude_unc / amplitude) ** 2 + (sigma_unc / sigma) ** 2
-    ) if amplitude > 0 and sigma > 0 else math.sqrt(abs(area))
+    if pcov is not None and np.shape(pcov) == (5, 5) and np.all(np.isfinite(pcov)):
+        var_amp = max(float(pcov[0, 0]), 0.0)
+        var_sigma = max(float(pcov[2, 2]), 0.0)
+        cov_amp_sigma = float(pcov[0, 2])
+        amp_unc = float(math.sqrt(var_amp))
+        sigma_unc = float(math.sqrt(var_sigma))
+        var_area = 2.0 * math.pi * (
+            sigma_energy**2 * var_amp
+            + amplitude**2 * var_sigma
+            + 2.0 * amplitude * sigma_energy * cov_amp_sigma
+        )
+        area_unc = float(math.sqrt(max(var_area, 0.0)))
+    else:
+        amp_unc = float("nan")
+        sigma_unc = float("nan")
+        area_unc = float("nan")
 
-    fwhm_channels = float(2.354820045 * sigma)
-    left_channel = float(mu - fwhm_channels / 2.0)
-    right_channel = float(mu + fwhm_channels / 2.0)
-
-    peak_energy = _interp_energy(spectrum, mu)
-    left_energy = _interp_energy(spectrum, left_channel)
-    right_energy = _interp_energy(spectrum, right_channel)
-    fwhm_energy = abs(right_energy - left_energy)
+    peak_channel = _energy_to_channel(spectrum, peak_energy)
+    left_channel = _energy_to_channel(spectrum, left_energy)
+    right_channel = _energy_to_channel(spectrum, right_energy)
+    fwhm_channels = abs(right_channel - left_channel)
 
     return Peak(
         index=-1,
-        peak_channel=float(mu),
+        peak_channel=peak_channel,
         peak_energy=peak_energy,
         area=area,
-        area_uncertainty=float(area_unc),
+        area_uncertainty=area_unc,
         amplitude=amplitude,
-        amplitude_uncertainty=amplitude_unc,
-        sigma=sigma,
+        amplitude_uncertainty=amp_unc,
+        sigma=sigma_energy,
         fwhm_channels=fwhm_channels,
         fwhm_energy=fwhm_energy,
         left_channel=left_channel,
@@ -204,9 +284,10 @@ def detect_peaks(
     sg_window: int = 9,
     sg_polyorder: int = 3,
 ) -> tuple[list[Peak], list[dict[str, Any]], np.ndarray, float]:
-    """Detect and fit peaks using the simplified Mariscotti workflow."""
-    candidates, transform, sigma = find_candidates(
+    """Detect and fit peaks using strict Mariscotti-like detection on energy axis."""
+    candidates, transform, sigma_t = find_candidates_strict(
         spectrum.counts,
+        spectrum.energy,
         z=z,
         w=w,
         sigma_factor=sigma_factor,
@@ -218,27 +299,30 @@ def detect_peaks(
 
     peaks: list[Peak] = []
     for candidate in candidates:
-        peak = _fit_candidate(spectrum, candidate, fit_half_width=fit_half_width)
+        peak = _fit_candidate_on_energy_axis(spectrum, candidate, fit_half_width=fit_half_width)
         if peak is not None:
             peaks.append(peak)
 
-    peaks.sort(key=lambda p: p.peak_energy)
+    peaks.sort(key=lambda peak: peak.peak_energy)
     for i, peak in enumerate(peaks, start=1):
         peak.index = i
 
-    return peaks, candidates, transform, sigma
+    return peaks, candidates, transform, sigma_t
 
 
 def nearest_peak(peaks: list[Peak], target_energy: float, tolerance_kev: float) -> Peak:
     if not peaks:
         raise ValueError("No peaks have been detected.")
 
-    candidates = [p for p in peaks if abs(p.peak_energy - target_energy) <= tolerance_kev]
+    candidates = [
+        peak for peak in peaks
+        if abs(peak.peak_energy - float(target_energy)) <= float(tolerance_kev)
+    ]
     if not candidates:
-        detected = ", ".join(f"{p.peak_energy:.2f}" for p in peaks[:20])
+        detected = ", ".join(f"{peak.peak_energy:.2f}" for peak in peaks[:20])
         raise ValueError(
             f"No detected peak within {tolerance_kev:.2f} keV of {target_energy:.2f} keV. "
             f"Detected energies: {detected}"
         )
 
-    return min(candidates, key=lambda p: abs(p.peak_energy - target_energy))
+    return min(candidates, key=lambda peak: abs(peak.peak_energy - float(target_energy)))

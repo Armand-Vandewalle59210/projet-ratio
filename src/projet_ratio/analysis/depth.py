@@ -76,7 +76,7 @@ def calculate_uniform_contamination_depth(
 
     if r >= k:
         raise ValueError(
-            "No finite uniform-layer depth exists because valley/peak ratio is >= k. "
+            "No finite uniform-layer depth solution exists because valley/peak ratio is >= k. "
             "Check k, valley selection, or use the point-source model."
         )
 
