@@ -57,7 +57,7 @@ class MainWindow(QMainWindow):
             "Peak height / local background height",
             "Peak area / peak area",
         ])
-
+        self.ratio_method.currentTextChanged.connect(self.update_ratio_method_ui)
         self.open_button = QPushButton("Open spectrum")
         self.open_button.clicked.connect(self.open_spectrum)
 
@@ -155,7 +155,7 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.log_scale)
         file_layout.addWidget(self.show_all_peaks)
 
-        peak_box = QGroupBox("Peak and valley selection")
+        peak_box = QGroupBox("Peak and ratio selection")
         peak_layout = QFormLayout(peak_box)
         peak_layout.addRow("Target energy", self.target_energy)
         peak_layout.addRow("Tolerance", self.tolerance)
@@ -377,70 +377,65 @@ class MainWindow(QMainWindow):
         # This keeps the workflow explicit: Detect peaks -> select/adjust -> Calculate ratio.
         return
 
+
     def calculate_ratio(self, show_errors: bool = True) -> None:
         if self.spectrum is None:
             self.results.setText("Load a spectrum first.")
             return
 
-        if not self.peaks:
-            self.results.setText("Detect peaks first, then select a peak or use a valid target energy.")
+        if self.selected_peak is None:
+            self.results.setText("Select a peak first.")
             return
 
-        if self.selected_peak is None:
-            try:
-                self.selected_peak = nearest_peak(self.peaks, self.target_energy.value(), self.tolerance.value())
-                self._select_peak_row(self.selected_peak)
-                self.plot.set_peaks(self.peaks, self.selected_peak)
-                
-                self.plot.set_region_defaults_for_peak(
-                    self.selected_peak.peak_energy,
-                    self.valley_size.value(),
-                    self.valley_distance.value(),
+        method = self.ratio_method.currentText()
+
+        try:
+            if method == "Peak area / valley discontinuity":
+                self.calculate_peak_to_valley_ratio()
+                return
+
+            if method == "Peak height / Compton height":
+                result = peak_height_to_compton_height(
+                    self.spectrum,
+                    self.selected_peak,
+                    self.plot.compton_cursor_energy(),
                 )
 
-            except Exception:
+            elif method == "Peak area / Compton ROI area":
+                e_min, e_max = self.plot.compton_region_values()
+                result = peak_area_to_compton_area(
+                    self.spectrum,
+                    self.selected_peak,
+                    e_min,
+                    e_max,
+                )
+
+            else:
                 self.results.setText(
-                    "No peak is selected and no detected peak is close enough to the target energy.\n"
-                    "Select one peak in the table or increase the tolerance, then click Calculate ratio again."
+                    f"Ratio method not implemented yet: {method}"
                 )
                 return
 
-        self.plot.enforce_valley_size(self.valley_size.value())
-        lower_min, lower_max = self.plot.lower_region_values()
-        upper_min, upper_max = self.plot.upper_region_values()
-
-        try:
-            result = calculate_peak_to_valley(
-                self.spectrum,
-                self.selected_peak,
-                lower_min,
-                lower_max,
-                upper_min,
-                upper_max,
-            )
-            self.last_ratio_result = result
         except Exception as exc:
-            if show_errors:
-                self._show_error("Calculation failed", exc)
-            else:
-                self.results.setText(str(exc))
+            self._show_error("Ratio calculation failed", exc)
             return
-        inverse_ratio=1.0/result.ratio
-        inverse_ratio_uncertainty= result.ratio_uncertainty/(result.ratio**2)
+
+        self.display_generic_ratio_result(result)
+
+    def display_generic_ratio_result(self, result) -> None:
+        inverse_ratio = 1.0 / result.ratio
+        inverse_ratio_uncertainty = result.ratio_uncertainty / (result.ratio ** 2)
+
         self.results.setText(
-            f"Selected peak: {result.peak.peak_energy:.3f} keV\n"
-            f"Peak area: {result.peak.area:.3f} ± {result.peak.area_uncertainty:.3f}\n\n"
-            f"Valley size: {self.valley_size.value():.2f} keV each\n"
-            f"Valley distance from peak: {self.valley_distance.value():.2f} keV\n"
-            f"Lower valley [{result.lower_min_energy:.2f}, {result.lower_max_energy:.2f}] keV: "
-            f"{result.lower_counts:.3f} ± {result.lower_uncertainty:.3f}\n"
-            f"Upper valley [{result.upper_min_energy:.2f}, {result.upper_max_energy:.2f}] keV: "
-            f"{result.upper_counts:.3f} ± {result.upper_uncertainty:.3f}\n\n"
-            f"Valley discontinuity: {result.valley_counts:.3f} ± {result.valley_uncertainty:.3f}\n"
-            f"Peak-to-valley ratio Q: {result.ratio:.6g} ± {result.ratio_uncertainty:.3g}\n"
-            f"valley to peak ratio 1/Q: {inverse_ratio:.6g} ± {inverse_ratio_uncertainty:.3g}\n"
-            f"Acceptability lower/upper ≥ 2: {result.acceptable}"
+            f"Ratio method: {result.method}\n\n"
+            f"{result.numerator_name}: "
+            f"{result.numerator:.6g} ± {result.numerator_uncertainty:.3g}\n"
+            f"{result.denominator_name}: "
+            f"{result.denominator:.6g} ± {result.denominator_uncertainty:.3g}\n\n"
+            f"Ratio: {result.ratio:.6g} ± {result.ratio_uncertainty:.3g}\n"
+            f"Inverse ratio: {inverse_ratio:.6g} ± {inverse_ratio_uncertainty:.3g}"
         )
+
     def calculate_depth(self) -> None:
         """Calculate depth from the latest peak-to-valley result."""
         if self.last_ratio_result is None:
@@ -501,6 +496,18 @@ class MainWindow(QMainWindow):
             + f"ρ: {density:.6g} g/cm³\n"
             + f"Depth: {depth:.6g} ± {depth_uncertainty:.3g} cm"
         )
+
+    def update_ratio_method_ui(self) -> None:
+        method = self.ratio_method.currentText()
+
+        use_valleys = method == "Peak area / valley discontinuity"
+        use_compton_cursor = method == "Peak height / Compton height"
+        use_compton_region = method == "Peak area / Compton ROI area"
+
+        self.plot.lower_region.setVisible(use_valleys)
+        self.plot.upper_region.setVisible(use_valleys)
+        self.plot.compton_cursor.setVisible(use_compton_cursor)
+        self.plot.compton_region.setVisible(use_compton_region)
 
     def _show_error(self, title: str, exc: Exception) -> None:
         QMessageBox.critical(self, title, str(exc))
