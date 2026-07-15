@@ -317,11 +317,11 @@ class MainWindow(QMainWindow):
         self.plot.set_log_mode(self.log_scale.isChecked())
         if self.spectrum is not None:
             self.plot.set_spectrum(self.spectrum)
-            self.plot.set_peaks(self.peaks, self.selected_peak)
+            self.refresh_peak_markers()
 
     def toggle_all_peak_markers(self) -> None:
         self.plot.set_show_all_peak_markers(self.show_all_peaks.isChecked())
-        self.plot.set_peaks(self.peaks, self.selected_peak)
+        self.refresh_peak_markers()
 
     def apply_valley_size(self) -> None:
         self.plot.enforce_valley_size(self.valley_size.value())
@@ -389,7 +389,7 @@ class MainWindow(QMainWindow):
                 "Select a peak in the table or change the target/tolerance."
             )
 
-        self.plot.set_peaks(self.peaks, self.selected_peak)
+        self.refresh_peak_markers()
         self.results.setText(
             f"Detected {len(self.peaks)} fitted peaks." + target_message + "\n"
             "Click 'Calculate ratio' when the correct peak and valley regions are selected."
@@ -439,7 +439,7 @@ class MainWindow(QMainWindow):
             return
         self.selected_peak = self.peaks[row]
         self.target_energy.setValue(self.selected_peak.peak_energy)
-        self.plot.set_peaks(self.peaks, self.selected_peak)
+        self.refresh_peak_markers()
         
         self.plot.set_region_defaults_for_peak(
             self.selected_peak.peak_energy,
@@ -691,10 +691,12 @@ class MainWindow(QMainWindow):
 
         if self.peak_pair_options_box is not None:
             self.peak_pair_options_box.setVisible(use_peak_pair)
-
+        self.refresh_peak_markers()
     def update_selected_peak_b(self) -> None:
+            
         if not self.peaks or self.peak_b_combo.currentIndex() < 0:
             self.selected_peak_b = None
+            self.refresh_peak_markers()
             return
 
         peak_index = self.peak_b_combo.currentData()
@@ -702,9 +704,12 @@ class MainWindow(QMainWindow):
         for peak in self.peaks:
             if peak.index == peak_index:
                 self.selected_peak_b = peak
+                self.refresh_peak_markers()
                 return
 
         self.selected_peak_b = None
+        self.refresh_peak_markers()
+
 
     def apply_compton_cursor_position(self) -> None:
         """Move the green Compton cursor to the value selected by the user."""
@@ -732,6 +737,21 @@ class MainWindow(QMainWindow):
             background_distance=self.background_roi_distance.value(),
         )
 
+
+    def refresh_peak_markers(self) -> None:
+        """Refresh Peak A and Peak B markers depending on the selected ratio method."""
+        method = self.ratio_method.currentText()
+
+        show_peak_b = method in {
+            "Peak area / peak area",
+            "Peak height / peak height",
+        }
+
+        self.plot.set_peaks(
+            self.peaks,
+            self.selected_peak,
+            self.selected_peak_b if show_peak_b else None,
+        )
 
     def _show_error(self, title: str, exc: Exception) -> None:
         QMessageBox.critical(self, title, str(exc))

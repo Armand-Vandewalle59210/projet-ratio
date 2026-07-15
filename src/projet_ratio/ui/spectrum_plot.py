@@ -35,6 +35,10 @@ class SpectrumPlot(QWidget):
         self.spectrum_curve: pg.PlotDataItem | None = None
         self.selected_peak_line: pg.InfiniteLine | None = None
         self.selected_peak_marker: pg.PlotDataItem | None = None
+        
+        self.second_peak_line: pg.InfiniteLine | None = None
+        self.second_peak_marker: pg.PlotDataItem | None = None
+
         self.all_peak_items: list[pg.GraphicsObject] = []
         self.log_mode = False
         self.show_all_peaks = False
@@ -122,7 +126,7 @@ class SpectrumPlot(QWidget):
         )
         self.plot.enableAutoRange()
 
-    def set_peaks(self, peaks: list[Peak], selected_peak: Peak | None = None) -> None:
+    def set_peaks(self, peaks: list[Peak], selected_peak: Peak | None = None,second_peak: Peak | None = None,) -> None:
         """Update peak indicators.
 
         By default only the selected peak is drawn. If show_all_peaks is enabled,
@@ -143,7 +147,10 @@ class SpectrumPlot(QWidget):
                 self.all_peak_items.append(line)
 
         if selected_peak is not None:
-            self.set_selected_peak(selected_peak)
+            self.set_selected_peak(selected_peak)       
+        if second_peak is not None:
+            self.set_second_peak(second_peak)
+
 
     def set_selected_peak(self, peak: Peak | None) -> None:
         if self.selected_peak_line is not None:
@@ -179,6 +186,44 @@ class SpectrumPlot(QWidget):
             name="Selected peak",
         )
         self.selected_peak_marker.setZValue(21)
+        
+    def set_second_peak(self, peak: Peak | None) -> None:
+        """Draw the second peak marker used for peak-to-peak ratios."""
+        if self.second_peak_line is not None:
+            self.plot.removeItem(self.second_peak_line)
+            self.second_peak_line = None
+
+        if self.second_peak_marker is not None:
+            self.plot.removeItem(self.second_peak_marker)
+            self.second_peak_marker = None
+
+        if peak is None:
+            return
+
+        self.second_peak_line = pg.InfiniteLine(
+            pos=peak.peak_energy,
+            angle=90,
+            movable=False,
+            pen=pg.mkPen("#FF8F00", width=2),
+            label=f"Peak B: {peak.peak_energy:.2f} keV",
+            labelOpts={"position": 0.82, "color": "#FF8F00"},
+        )
+        self.second_peak_line.setZValue(19)
+        self.plot.addItem(self.second_peak_line)
+
+        y = self.y_at_energy(peak.peak_energy)
+
+        self.second_peak_marker = self.plot.plot(
+            [peak.peak_energy],
+            [y],
+            pen=None,
+            symbol="s",
+            symbolSize=11,
+            symbolBrush="#FF8F00",
+            symbolPen=pg.mkPen("w", width=1.5),
+            name="Peak B",
+        )
+        self.second_peak_marker.setZValue(20)
 
     def clear_peak_indicators(self) -> None:
         for item in self.all_peak_items:
@@ -190,6 +235,15 @@ class SpectrumPlot(QWidget):
         if self.selected_peak_marker is not None:
             self.plot.removeItem(self.selected_peak_marker)
             self.selected_peak_marker = None
+        
+        if self.second_peak_line is not None:
+            self.plot.removeItem(self.second_peak_line)
+            self.second_peak_line = None
+
+        if self.second_peak_marker is not None:
+            self.plot.removeItem(self.second_peak_marker)
+            self.second_peak_marker = None
+
 
     def clear_peaks(self) -> None:
         self.clear_peak_indicators()
