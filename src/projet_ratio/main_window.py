@@ -86,6 +86,11 @@ class MainWindow(QMainWindow):
         
         self.valley_distance = self._double_spin(0.0, 500.0, 12.0, 1, " keV")
         self.valley_distance.valueChanged.connect(self.apply_valley_geometry)
+        
+        self.valley_options_box = None
+        self.compton_options_box = None
+        self.background_options_box = None
+        self.peak_pair_options_box = None
 
         self.depth_model = QComboBox()
         self.depth_model.addItems([
@@ -128,7 +133,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([380, 1000])
         self.setCentralWidget(splitter)
-
+        self.update_ratio_method_ui()
     @staticmethod
     def _double_spin(minimum: float, maximum: float, value: float, decimals: int, suffix: str) -> QDoubleSpinBox:
         widget = QDoubleSpinBox()
@@ -158,14 +163,33 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.file_label)
         file_layout.addWidget(self.log_scale)
         file_layout.addWidget(self.show_all_peaks)
-
-        peak_box = QGroupBox("Peak and ratio selection")
+     
+        peak_box = QGroupBox("Peak selection")
         peak_layout = QFormLayout(peak_box)
         peak_layout.addRow("Target energy", self.target_energy)
         peak_layout.addRow("Tolerance", self.tolerance)
-        peak_layout.addRow("Valley size", self.valley_size)
-        peak_layout.addRow("Valley distance", self.valley_distance)
-        peak_layout.addRow("Ratio method", self.ratio_method)
+
+        ratio_box = QGroupBox("Ratio method")
+        ratio_layout = QFormLayout(ratio_box)
+        ratio_layout.addRow("Method", self.ratio_method)
+
+        self.valley_options_box = QGroupBox("Valley parameters")
+        valley_layout = QFormLayout(self.valley_options_box)
+        valley_layout.addRow("Valley size", self.valley_size)
+        valley_layout.addRow("Valley distance", self.valley_distance)
+
+        self.compton_options_box = QGroupBox("Compton parameters")
+        compton_layout = QFormLayout(self.compton_options_box)
+        compton_layout.addRow(QLabel("Move the green Compton cursor or ROI on the plot."))
+
+        self.background_options_box = QGroupBox("Background parameters")
+        background_layout = QFormLayout(self.background_options_box)
+        background_layout.addRow(QLabel("Local background ROI controls will be added here."))
+
+        self.peak_pair_options_box = QGroupBox("Peak-pair parameters")
+        peak_pair_layout = QFormLayout(self.peak_pair_options_box)
+        peak_pair_layout.addRow(QLabel("Select two peaks for peak/peak ratio."))
+
         depth_box = QGroupBox("Depth calculation")
         depth_layout = QFormLayout(depth_box)
         depth_layout.addRow("Model", self.depth_model)
@@ -196,6 +220,11 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(file_box)
         layout.addWidget(peak_box)
+        layout.addWidget(ratio_box)
+        layout.addWidget(self.valley_options_box)
+        layout.addWidget(self.compton_options_box)
+        layout.addWidget(self.background_options_box)
+        layout.addWidget(self.peak_pair_options_box)
         layout.addWidget(depth_box)
         layout.addWidget(mariscotti_box)
         layout.addWidget(self.detect_button)
@@ -204,6 +233,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.peaks_table)
         layout.addWidget(QLabel("Results"))
         layout.addWidget(self.results)
+
         layout.addStretch(1)
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -533,16 +563,34 @@ class MainWindow(QMainWindow):
         )
 
     def update_ratio_method_ui(self) -> None:
+        
         method = self.ratio_method.currentText()
 
         use_valleys = method == "Peak area / valley discontinuity"
         use_compton_cursor = method == "Peak height / Compton height"
         use_compton_region = method == "Peak area / Compton ROI area"
+        use_background = method == "Peak height / local background height"
+        use_peak_pair = method == "Peak area / peak area"
 
+        # Plot objects
         self.plot.lower_region.setVisible(use_valleys)
         self.plot.upper_region.setVisible(use_valleys)
         self.plot.compton_cursor.setVisible(use_compton_cursor)
         self.plot.compton_region.setVisible(use_compton_region)
+
+        # Left-panel parameter boxes
+        if self.valley_options_box is not None:
+            self.valley_options_box.setVisible(use_valleys)
+
+        if self.compton_options_box is not None:
+            self.compton_options_box.setVisible(use_compton_cursor or use_compton_region)
+
+        if self.background_options_box is not None:
+            self.background_options_box.setVisible(use_background)
+
+        if self.peak_pair_options_box is not None:
+            self.peak_pair_options_box.setVisible(use_peak_pair)
+
 
     def _show_error(self, title: str, exc: Exception) -> None:
         QMessageBox.critical(self, title, str(exc))
