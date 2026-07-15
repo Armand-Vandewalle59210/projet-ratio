@@ -48,6 +48,16 @@ class MainWindow(QMainWindow):
         self.plot = SpectrumPlot()
         self.plot.valley_regions_changed.connect(self.calculate_if_possible)
 
+
+        self.ratio_method = QComboBox()
+        self.ratio_method.addItems([
+            "Peak area / valley discontinuity",
+            "Peak height / Compton height",
+            "Peak area / Compton ROI area",
+            "Peak height / local background height",
+            "Peak area / peak area",
+        ])
+
         self.open_button = QPushButton("Open spectrum")
         self.open_button.clicked.connect(self.open_spectrum)
 
@@ -151,6 +161,7 @@ class MainWindow(QMainWindow):
         peak_layout.addRow("Tolerance", self.tolerance)
         peak_layout.addRow("Valley size", self.valley_size)
         peak_layout.addRow("Valley distance", self.valley_distance)
+        peak_layout.addRow("Ratio method", self.ratio_method)
         depth_box = QGroupBox("Depth calculation")
         depth_layout = QFormLayout(depth_box)
         depth_layout.addRow("Model", self.depth_model)
@@ -188,7 +199,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Detected peaks"))
         layout.addWidget(self.peaks_table)
         layout.addWidget(peak_box)
-        
+
         layout.addWidget(self.calculate_button)
         layout.addWidget(depth_box)
         layout.addWidget(QLabel("Results"))

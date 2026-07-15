@@ -46,8 +46,28 @@ class SpectrumPlot(QWidget):
         self.upper_region.setZValue(10)
         self.lower_region.sigRegionChanged.connect(self._region_changed)
         self.upper_region.sigRegionChanged.connect(self._region_changed)
+        
         self.plot.addItem(self.lower_region)
         self.plot.addItem(self.upper_region)
+                
+        self.compton_cursor = pg.InfiniteLine(
+            pos=400.0,
+            angle=90,
+            movable=True,
+            pen=pg.mkPen("#2E7D32", width=2),
+            label="Compton cursor: {value:.2f} keV",
+            labelOpts={"position": 0.85, "color": "#2E7D32"},
+        )
+        self.compton_cursor.setZValue(30)
+        self.plot.addItem(self.compton_cursor)
+        
+        self.compton_region = pg.LinearRegionItem(
+            values=[350.0, 450.0],
+            brush=(40, 180, 90, 45),
+        )
+        self.compton_region.setZValue(9)
+        self.plot.addItem(self.compton_region)
+
 
     def _region_changed(self) -> None:
         if not self._updating_regions:
@@ -206,4 +226,11 @@ class SpectrumPlot(QWidget):
             self.upper_region.setRegion((upper_min, upper_min + size))
         finally:
             self._updating_regions = False
+    
+    def compton_cursor_energy(self) -> float:
+        return float(self.compton_cursor.value())
 
+
+    def compton_region_values(self) -> tuple[float, float]:
+        a, b = self.compton_region.getRegion()
+        return float(a), float(b)
