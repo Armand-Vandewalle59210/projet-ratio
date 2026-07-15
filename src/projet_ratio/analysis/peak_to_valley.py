@@ -5,7 +5,11 @@ import numpy as np
 from projet_ratio.models import Peak, PeakToValleyResult, Spectrum
 
 
-def integrate_energy_window(spectrum: Spectrum, energy_min: float, energy_max: float) -> tuple[float, float]:
+def integrate_energy_window(
+    spectrum: Spectrum,
+    energy_min: float,
+    energy_max: float,
+) -> tuple[float, float]:
     """Integrate counts in an energy interval with Poisson uncertainty."""
     e1, e2 = sorted((float(energy_min), float(energy_max)))
     mask = (spectrum.energy >= e1) & (spectrum.energy <= e2)
@@ -14,39 +18,58 @@ def integrate_energy_window(spectrum: Spectrum, energy_min: float, energy_max: f
     return total, uncertainty
 
 
-def calculate_peak_to_valley_ratio(self) -> None:
-    self.plot.enforce_valley_size(self.valley_size.value())
-
-    lower_min, lower_max = self.plot.lower_region_values()
-    upper_min, upper_max = self.plot.upper_region_values()
-
-    result = calculate_peak_to_valley(
-        self.spectrum,
-        self.selected_peak,
-        lower_min,
-        lower_max,
-        upper_min,
-        upper_max,
+def calculate_peak_to_valley(
+    spectrum: Spectrum,
+    peak: Peak,
+    lower_min_energy: float,
+    lower_max_energy: float,
+    upper_min_energy: float,
+    upper_max_energy: float,
+) -> PeakToValleyResult:
+    """Calculate peak-area / valley-discontinuity ratio."""
+    lower_counts, lower_unc = integrate_energy_window(
+        spectrum,
+        lower_min_energy,
+        lower_max_energy,
+    )
+    upper_counts, upper_unc = integrate_energy_window(
+        spectrum,
+        upper_min_energy,
+        upper_max_energy,
     )
 
-    self.last_ratio_result = result
+    valley_counts = lower_counts - upper_counts
+    valley_unc = float(np.sqrt(lower_unc**2 + upper_unc**2))
 
-    inverse_ratio = 1.0 / result.ratio
-    inverse_ratio_uncertainty = result.ratio_uncertainty / (result.ratio ** 2)
+    if valley_counts <= 0:
+        raise ValueError(
+            "The valley discontinuity is not positive. Move the valley regions "
+            "or check that the selected peak is appropriate."
+        )
+    if peak.area <= 0:
+        raise ValueError("The selected peak area is not positive.")
 
-    self.results.setText(
-        f"Ratio method: Peak area / valley discontinuity\n\n"
-        f"Selected peak: {result.peak.peak_energy:.3f} keV\n"
-        f"Peak area: {result.peak.area:.3f} ± {result.peak.area_uncertainty:.3f}\n\n"
-        f"Valley size: {self.valley_size.value():.2f} keV each\n"
-        f"Valley distance from peak: {self.valley_distance.value():.2f} keV\n"
-        f"Lower valley [{result.lower_min_energy:.2f}, {result.lower_max_energy:.2f}] keV: "
-        f"{result.lower_counts:.3f} ± {result.lower_uncertainty:.3f}\n"
-        f"Upper valley [{result.upper_min_energy:.2f}, {result.upper_max_energy:.2f}] keV: "
-        f"{result.upper_counts:.3f} ± {result.upper_uncertainty:.3f}\n\n"
-        f"Valley discontinuity: {result.valley_counts:.3f} ± {result.valley_uncertainty:.3f}\n"
-        f"Peak-to-valley ratio Q: {result.ratio:.6g} ± {result.ratio_uncertainty:.3g}\n"
-        f"Valley-to-peak ratio 1/Q: {inverse_ratio:.6g} ± {inverse_ratio_uncertainty:.3g}\n"
-        f"Acceptability lower/upper ≥ 2: {result.acceptable}"
+    ratio = float(peak.area / valley_counts)
+    ratio_uncertainty = ratio * np.sqrt(
+        (peak.area_uncertainty / peak.area) ** 2
+        + (valley_unc / valley_counts) ** 2
     )
 
+    acceptable = bool((lower_counts / upper_counts) >= 2.0) if upper_counts > 0 else False
+
+    return PeakToValleyResult(
+        peak=peak,
+        lower_min_energy=min(lower_min_energy, lower_max_energy),
+        lower_max_energy=max(lower_min_energy, lower_max_energy),
+        upper_min_energy=min(upper_min_energy, upper_max_energy),
+        upper_max_energy=max(upper_min_energy, upper_max_energy),
+        lower_counts=lower_counts,
+        lower_uncertainty=lower_unc,
+        upper_counts=upper_counts,
+        upper_uncertainty=upper_unc,
+        valley_counts=valley_counts,
+        valley_uncertainty=valley_unc,
+        ratio=ratio,
+        ratio_uncertainty=float(ratio_uncertainty),
+        acceptable=acceptable,
+    )
