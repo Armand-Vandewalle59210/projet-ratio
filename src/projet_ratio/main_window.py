@@ -31,7 +31,7 @@ from projet_ratio.analysis.ratios import (
     peak_height_to_compton_height,
     peak_area_to_peak_area,
     peak_height_to_local_background_height,
-
+    peak_height_to_peak_height
 )
 from projet_ratio.io.spectrum_io import load_spectrum
 from projet_ratio.models import Peak, Spectrum
@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
             "Peak area / Compton ROI area",
             "Peak height / local background height",
             "Peak area / peak area",
+            "Peak height / peak height",
         ])
         self.ratio_method.currentTextChanged.connect(self.update_ratio_method_ui)
         
@@ -91,7 +92,22 @@ class MainWindow(QMainWindow):
 
         self.valley_size = self._double_spin(0.1, 500.0, 18.0, 1, " keV")
         self.valley_size.valueChanged.connect(self.apply_valley_size)
-        
+        # Compton controls
+        self.compton_cursor_energy = self._double_spin(0.0, 4000.0, 400.0, 1, " keV")
+        self.compton_cursor_energy.valueChanged.connect(self.apply_compton_cursor_position)
+
+        self.compton_roi_center = self._double_spin(0.0, 4000.0, 400.0, 1, " keV")
+        self.compton_roi_center.valueChanged.connect(self.apply_compton_roi_geometry)
+
+        self.compton_roi_size = self._double_spin(0.1, 1000.0, 100.0, 1, " keV")
+        self.compton_roi_size.valueChanged.connect(self.apply_compton_roi_geometry)
+
+        # Background controls
+        self.background_roi_size = self._double_spin(0.1, 1000.0, 20.0, 1, " keV")
+        self.background_roi_size.valueChanged.connect(self.apply_background_roi_geometry)
+
+        self.background_roi_distance = self._double_spin(0.0, 1000.0, 25.0, 1, " keV")
+        self.background_roi_distance.valueChanged.connect(self.apply_background_roi_geometry)
         self.valley_distance = self._double_spin(0.0, 500.0, 12.0, 1, " keV")
         self.valley_distance.valueChanged.connect(self.apply_valley_geometry)
         
@@ -185,17 +201,22 @@ class MainWindow(QMainWindow):
         valley_layout = QFormLayout(self.valley_options_box)
         valley_layout.addRow("Valley size", self.valley_size)
         valley_layout.addRow("Valley distance", self.valley_distance)
-
+          
         self.compton_options_box = QGroupBox("Compton parameters")
         compton_layout = QFormLayout(self.compton_options_box)
-        compton_layout.addRow(QLabel("Move the green Compton cursor or ROI on the plot."))
+
+        compton_layout.addRow("Cursor energy", self.compton_cursor_energy)
+        compton_layout.addRow("ROI center", self.compton_roi_center)
+        compton_layout.addRow("ROI size", self.compton_roi_size)
 
         self.background_options_box = QGroupBox("Background parameters")
         background_layout = QFormLayout(self.background_options_box)
-        background_layout.addRow(QLabel("Local background ROI controls will be added here."))
+        background_layout.addRow("ROI size", self.background_roi_size)
+        background_layout.addRow("Distance from peak", self.background_roi_distance)
+
 
         
-        self.peak_pair_options_box = QGroupBox("Peak-pair parameters")
+        self.peak_pair_options_box = QGroupBox("Peak-to-peak parameters")
         peak_pair_layout = QFormLayout(self.peak_pair_options_box)
         peak_pair_layout.addRow("Peak B", self.peak_b_combo)
 
@@ -357,6 +378,8 @@ class MainWindow(QMainWindow):
 
             self.plot.set_background_defaults_for_peak(
                 self.selected_peak.peak_energy,
+                background_size=self.background_roi_size.value(),
+                background_distance=self.background_roi_distance.value(),
             )
 
             target_message = f" Nearest target peak selected: {self.selected_peak.peak_energy:.3f} keV."
@@ -426,6 +449,8 @@ class MainWindow(QMainWindow):
         
         self.plot.set_background_defaults_for_peak(
             self.selected_peak.peak_energy,
+            background_size=self.background_roi_size.value(),
+            background_distance=self.background_roi_distance.value(),
         )
 
 
@@ -496,6 +521,16 @@ class MainWindow(QMainWindow):
                     return
 
                 result = peak_area_to_peak_area(
+                    self.selected_peak,
+                    self.selected_peak_b,
+                )
+
+            elif method == "Peak height / peak height":
+                if self.selected_peak_b is None:
+                    self.results.setText("Select Peak B before calculating a peak/peak ratio.")
+                    return
+
+                result = peak_height_to_peak_height(
                     self.selected_peak,
                     self.selected_peak_b,
                 )
@@ -628,8 +663,12 @@ class MainWindow(QMainWindow):
         use_valleys = method == "Peak area / valley discontinuity"
         use_compton_cursor = method == "Peak height / Compton height"
         use_compton_region = method == "Peak area / Compton ROI area"
-        use_background = method == "Peak height / local background height"
-        use_peak_pair = method == "Peak area / peak area"
+        use_background = method == "Peak height / local background height"   
+        use_peak_pair = method in {
+            "Peak area / peak area",
+            "Peak height / peak height",
+        }
+
 
        
     # Plot objects
@@ -666,6 +705,32 @@ class MainWindow(QMainWindow):
                 return
 
         self.selected_peak_b = None
+
+    def apply_compton_cursor_position(self) -> None:
+        """Move the green Compton cursor to the value selected by the user."""
+        self.plot.compton_cursor.setValue(self.compton_cursor_energy.value())
+
+
+    def apply_compton_roi_geometry(self) -> None:
+        """Set the Compton ROI from center and size controls."""
+        center = self.compton_roi_center.value()
+        size = self.compton_roi_size.value()
+
+        self.plot.compton_region.setRegion(
+            (center - size / 2.0, center + size / 2.0)
+        )
+
+
+    def apply_background_roi_geometry(self) -> None:
+        """Set the local background ROIs around the selected peak."""
+        if self.selected_peak is None:
+            return
+
+        self.plot.set_background_defaults_for_peak(
+            self.selected_peak.peak_energy,
+            background_size=self.background_roi_size.value(),
+            background_distance=self.background_roi_distance.value(),
+        )
 
 
     def _show_error(self, title: str, exc: Exception) -> None:

@@ -250,32 +250,32 @@ class SpectrumPlot(QWidget):
         a, b = self.compton_region.getRegion()
         return float(a), float(b)
 
-def background_region_values(self) -> tuple[float, float, float, float]:
-    left_min, left_max = self.background_left_region.getRegion()
-    right_min, right_max = self.background_right_region.getRegion()
+    def background_region_values(self) -> tuple[float, float, float, float]:
+        left_min, left_max = self.background_left_region.getRegion()
+        right_min, right_max = self.background_right_region.getRegion()
 
-    return (
-        float(left_min),
-        float(left_max),
-        float(right_min),
-        float(right_max),
-    )
+        return (
+            float(left_min),
+            float(left_max),
+            float(right_min),
+            float(right_max),
+        )
 
 
-def set_background_defaults_for_peak(
-    self,
-    peak_energy: float,
-    background_size: float = 20.0,
-    background_distance: float = 25.0,
-) -> None:
-    """Place two equal background ROIs around the selected peak."""
-    e = float(peak_energy)
-    size = max(float(background_size), 0.1)
-    distance = max(float(background_distance), 0.0)
+    def set_background_defaults_for_peak(
+        self,
+        peak_energy: float,
+        background_size: float = 20.0,
+        background_distance: float = 25.0,
+    ) -> None:
+        """Place two equal background ROIs around the selected peak."""
+        e = float(peak_energy)
+        size = max(float(background_size), 0.1)
+        distance = max(float(background_distance), 0.0)
 
-    self.background_left_region.setRegion(
-        (e - distance - size, e - distance)
-    )
-    self.background_right_region.setRegion(
-        (e + distance, e + distance + size)
-    )
+        self.background_left_region.setRegion(
+            (e - distance - size, e - distance)
+        )
+        self.background_right_region.setRegion(
+            (e + distance, e + distance + size)
+        )

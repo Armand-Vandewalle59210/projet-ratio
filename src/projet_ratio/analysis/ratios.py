@@ -258,3 +258,42 @@ def peak_area_to_peak_area(
         ratio=ratio,
         ratio_uncertainty=ratio_uncertainty,
     )
+
+def peak_height_to_peak_height(
+    peak_a: Peak,
+    peak_b: Peak,
+) -> RatioResult:
+    """Height ratio between two fitted peaks."""
+    if peak_a.index == peak_b.index:
+        raise ValueError("Peak A and Peak B must be different peaks.")
+
+    height_a = float(peak_a.amplitude)
+    height_b = float(peak_b.amplitude)
+
+    height_a_uncertainty = float(peak_a.amplitude_uncertainty)
+    height_b_uncertainty = float(peak_b.amplitude_uncertainty)
+
+    if not np.isfinite(height_a_uncertainty):
+        height_a_uncertainty = float(np.sqrt(max(height_a, 0.0)))
+
+    if not np.isfinite(height_b_uncertainty):
+        height_b_uncertainty = float(np.sqrt(max(height_b, 0.0)))
+
+    ratio, ratio_uncertainty = propagate_ratio(
+        height_a,
+        height_a_uncertainty,
+        height_b,
+        height_b_uncertainty,
+    )
+
+    return RatioResult(
+        method="Peak height / peak height",
+        numerator_name=f"Peak A height at {peak_a.peak_energy:.3f} keV",
+        denominator_name=f"Peak B height at {peak_b.peak_energy:.3f} keV",
+        numerator=height_a,
+        numerator_uncertainty=height_a_uncertainty,
+        denominator=height_b,
+        denominator_uncertainty=height_b_uncertainty,
+        ratio=ratio,
+        ratio_uncertainty=ratio_uncertainty,
+    )
