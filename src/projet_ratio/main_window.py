@@ -29,6 +29,9 @@ from projet_ratio.analysis.peak_to_valley import calculate_peak_to_valley
 from projet_ratio.analysis.ratios import (
     peak_area_to_compton_area,
     peak_height_to_compton_height,
+    peak_area_to_peak_area,
+    peak_height_to_local_background_height,
+
 )
 from projet_ratio.io.spectrum_io import load_spectrum
 from projet_ratio.models import Peak, Spectrum
@@ -48,6 +51,7 @@ class MainWindow(QMainWindow):
         self.spectrum: Spectrum | None = None
         self.peaks: list[Peak] = []
         self.selected_peak: Peak | None = None
+        self.selected_peak_b: Peak | None = None
         self.last_ratio_result = None
         self.plot = SpectrumPlot()
         self.plot.valley_regions_changed.connect(self.calculate_if_possible)
@@ -62,6 +66,10 @@ class MainWindow(QMainWindow):
             "Peak area / peak area",
         ])
         self.ratio_method.currentTextChanged.connect(self.update_ratio_method_ui)
+        
+        self.peak_b_combo = QComboBox()
+        self.peak_b_combo.currentIndexChanged.connect(self.update_selected_peak_b)
+
         self.open_button = QPushButton("Open spectrum")
         self.open_button.clicked.connect(self.open_spectrum)
 
@@ -186,9 +194,11 @@ class MainWindow(QMainWindow):
         background_layout = QFormLayout(self.background_options_box)
         background_layout.addRow(QLabel("Local background ROI controls will be added here."))
 
+        
         self.peak_pair_options_box = QGroupBox("Peak-pair parameters")
         peak_pair_layout = QFormLayout(self.peak_pair_options_box)
-        peak_pair_layout.addRow(QLabel("Select two peaks for peak/peak ratio."))
+        peak_pair_layout.addRow("Peak B", self.peak_b_combo)
+
 
         depth_box = QGroupBox("Depth calculation")
         depth_layout = QFormLayout(depth_box)
@@ -345,6 +355,10 @@ class MainWindow(QMainWindow):
                 self.valley_distance.value(),
             )
 
+            self.plot.set_background_defaults_for_peak(
+                self.selected_peak.peak_energy,
+            )
+
             target_message = f" Nearest target peak selected: {self.selected_peak.peak_energy:.3f} keV."
         except Exception:
             target_message = (
@@ -372,6 +386,19 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, peak.index)
                 self.peaks_table.setItem(row, col, item)
+                
+        self.peak_b_combo.blockSignals(True)
+        self.peak_b_combo.clear()
+
+        for peak in self.peaks:
+            self.peak_b_combo.addItem(
+                f"{peak.index}: {peak.peak_energy:.3f} keV",
+                peak.index,
+            )
+
+        self.peak_b_combo.blockSignals(False)
+        self.update_selected_peak_b()
+
         self.peaks_table.resizeColumnsToContents()
 
     def _select_peak_row(self, peak: Peak | None) -> None:
@@ -396,6 +423,11 @@ class MainWindow(QMainWindow):
             self.valley_size.value(),
             self.valley_distance.value(),
         )
+        
+        self.plot.set_background_defaults_for_peak(
+            self.selected_peak.peak_energy,
+        )
+
 
         self.results.setText(
             f"Selected peak: {self.selected_peak.peak_energy:.3f} keV.\n"
@@ -419,6 +451,7 @@ class MainWindow(QMainWindow):
 
         method = self.ratio_method.currentText()
 
+        
         try:
             if method == "Peak area / valley discontinuity":
                 self.calculate_peak_to_valley_ratio()
@@ -440,6 +473,33 @@ class MainWindow(QMainWindow):
                     e_max,
                 )
 
+            elif method == "Peak height / local background height":
+                (
+                    left_min,
+                    left_max,
+                    right_min,
+                    right_max,
+                ) = self.plot.background_region_values()
+
+                result = peak_height_to_local_background_height(
+                    self.spectrum,
+                    self.selected_peak,
+                    left_min,
+                    left_max,
+                    right_min,
+                    right_max,
+                )
+
+            elif method == "Peak area / peak area":
+                if self.selected_peak_b is None:
+                    self.results.setText("Select Peak B before calculating a peak/peak ratio.")
+                    return
+
+                result = peak_area_to_peak_area(
+                    self.selected_peak,
+                    self.selected_peak_b,
+                )
+
             else:
                 self.results.setText(
                     f"Ratio method not implemented yet: {method}"
@@ -449,7 +509,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error("Ratio calculation failed", exc)
             return
-
         self.display_generic_ratio_result(result)
 
     def display_generic_ratio_result(self, result) -> None:
@@ -572,11 +631,14 @@ class MainWindow(QMainWindow):
         use_background = method == "Peak height / local background height"
         use_peak_pair = method == "Peak area / peak area"
 
-        # Plot objects
+       
+    # Plot objects
         self.plot.lower_region.setVisible(use_valleys)
         self.plot.upper_region.setVisible(use_valleys)
         self.plot.compton_cursor.setVisible(use_compton_cursor)
         self.plot.compton_region.setVisible(use_compton_region)
+        self.plot.background_left_region.setVisible(use_background)
+        self.plot.background_right_region.setVisible(use_background)
 
         # Left-panel parameter boxes
         if self.valley_options_box is not None:
@@ -590,6 +652,20 @@ class MainWindow(QMainWindow):
 
         if self.peak_pair_options_box is not None:
             self.peak_pair_options_box.setVisible(use_peak_pair)
+
+    def update_selected_peak_b(self) -> None:
+        if not self.peaks or self.peak_b_combo.currentIndex() < 0:
+            self.selected_peak_b = None
+            return
+
+        peak_index = self.peak_b_combo.currentData()
+
+        for peak in self.peaks:
+            if peak.index == peak_index:
+                self.selected_peak_b = peak
+                return
+
+        self.selected_peak_b = None
 
 
     def _show_error(self, title: str, exc: Exception) -> None:
