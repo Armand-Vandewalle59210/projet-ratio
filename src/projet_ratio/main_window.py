@@ -69,6 +69,9 @@ class MainWindow(QMainWindow):
 
         self.valley_size = self._double_spin(0.1, 500.0, 18.0, 1, " keV")
         self.valley_size.valueChanged.connect(self.apply_valley_size)
+        
+        self.valley_distance = self._double_spin(0.0, 500.0, 12.0, 1, " keV")
+        self.valley_distance.valueChanged.connect(self.apply_valley_geometry)
 
         self.depth_model = QComboBox()
         self.depth_model.addItems([
@@ -147,7 +150,7 @@ class MainWindow(QMainWindow):
         peak_layout.addRow("Target energy", self.target_energy)
         peak_layout.addRow("Tolerance", self.tolerance)
         peak_layout.addRow("Valley size", self.valley_size)
-
+        peak_layout.addRow("Valley distance", self.valley_distance)
         depth_box = QGroupBox("Depth calculation")
         depth_layout = QFormLayout(depth_box)
         depth_layout.addRow("Model", self.depth_model)
@@ -177,12 +180,16 @@ class MainWindow(QMainWindow):
         mariscotti_outer_layout.addWidget(self.mariscotti_content)
 
         layout.addWidget(file_box)
-        layout.addWidget(peak_box)
         layout.addWidget(mariscotti_box)
+
         layout.addWidget(self.detect_button)
         layout.addWidget(self.calculate_button)
+
         layout.addWidget(QLabel("Detected peaks"))
         layout.addWidget(self.peaks_table)
+        layout.addWidget(peak_box)
+        
+        layout.addWidget(self.calculate_button)
         layout.addWidget(depth_box)
         layout.addWidget(QLabel("Results"))
         layout.addWidget(self.results)
@@ -249,6 +256,17 @@ class MainWindow(QMainWindow):
         # Do not force a ratio calculation here unless a result already exists.
         # The Calculate button remains the explicit calculation action.
 
+    def apply_valley_geometry(self) -> None:
+        """Update valley positions from valley size and valley distance."""
+        if self.selected_peak is None:
+            return
+
+        self.plot.set_region_defaults_for_peak(
+            self.selected_peak.peak_energy,
+            self.valley_size.value(),
+            self.valley_distance.value(),
+        )
+
     def detect_peaks_only(self) -> None:
         """Detect all peaks, update table/markers, and do not calculate ratio."""
         if self.spectrum is None:
@@ -279,7 +297,13 @@ class MainWindow(QMainWindow):
         try:
             self.selected_peak = nearest_peak(self.peaks, self.target_energy.value(), self.tolerance.value())
             self._select_peak_row(self.selected_peak)
-            self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
+            
+            self.plot.set_region_defaults_for_peak(
+                self.selected_peak.peak_energy,
+                self.valley_size.value(),
+                self.valley_distance.value(),
+            )
+
             target_message = f" Nearest target peak selected: {self.selected_peak.peak_energy:.3f} keV."
         except Exception:
             target_message = (
@@ -325,7 +349,13 @@ class MainWindow(QMainWindow):
         self.selected_peak = self.peaks[row]
         self.target_energy.setValue(self.selected_peak.peak_energy)
         self.plot.set_peaks(self.peaks, self.selected_peak)
-        self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
+        
+        self.plot.set_region_defaults_for_peak(
+            self.selected_peak.peak_energy,
+            self.valley_size.value(),
+            self.valley_distance.value(),
+        )
+
         self.results.setText(
             f"Selected peak: {self.selected_peak.peak_energy:.3f} keV.\n"
             "Adjust valley regions if needed, then click 'Calculate ratio'."
@@ -350,7 +380,13 @@ class MainWindow(QMainWindow):
                 self.selected_peak = nearest_peak(self.peaks, self.target_energy.value(), self.tolerance.value())
                 self._select_peak_row(self.selected_peak)
                 self.plot.set_peaks(self.peaks, self.selected_peak)
-                self.plot.set_region_defaults_for_peak(self.selected_peak.peak_energy, self.valley_size.value())
+                
+                self.plot.set_region_defaults_for_peak(
+                    self.selected_peak.peak_energy,
+                    self.valley_size.value(),
+                    self.valley_distance.value(),
+                )
+
             except Exception:
                 self.results.setText(
                     "No peak is selected and no detected peak is close enough to the target energy.\n"
@@ -378,17 +414,20 @@ class MainWindow(QMainWindow):
             else:
                 self.results.setText(str(exc))
             return
-
+        inverse_ratio=1.0/result.ratio
+        inverse_ratio_uncertainty= result.ratio_uncertainty/(result.ratio**2)
         self.results.setText(
             f"Selected peak: {result.peak.peak_energy:.3f} keV\n"
             f"Peak area: {result.peak.area:.3f} ± {result.peak.area_uncertainty:.3f}\n\n"
             f"Valley size: {self.valley_size.value():.2f} keV each\n"
+            f"Valley distance from peak: {self.valley_distance.value():.2f} keV\n"
             f"Lower valley [{result.lower_min_energy:.2f}, {result.lower_max_energy:.2f}] keV: "
             f"{result.lower_counts:.3f} ± {result.lower_uncertainty:.3f}\n"
             f"Upper valley [{result.upper_min_energy:.2f}, {result.upper_max_energy:.2f}] keV: "
             f"{result.upper_counts:.3f} ± {result.upper_uncertainty:.3f}\n\n"
             f"Valley discontinuity: {result.valley_counts:.3f} ± {result.valley_uncertainty:.3f}\n"
-            f"Peak-to-valley ratio: {result.ratio:.6g} ± {result.ratio_uncertainty:.3g}\n"
+            f"Peak-to-valley ratio Q: {result.ratio:.6g} ± {result.ratio_uncertainty:.3g}\n"
+            f"valley to peak ratio 1/Q: {inverse_ratio:.6g} ± {inverse_ratio_uncertainty:.3g}\n"
             f"Acceptability lower/upper ≥ 2: {result.acceptable}"
         )
     def calculate_depth(self) -> None:

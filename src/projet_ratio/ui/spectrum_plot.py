@@ -171,16 +171,18 @@ class SpectrumPlot(QWidget):
         self,
         peak_energy: float,
         valley_size: float = 18.0,
-        lower_gap: float = 12.0,
-        upper_gap: float = 10.0,
+        valley_distance: float = 12.0,
     ) -> None:
         """Place equal-width valley regions around a selected peak."""
         e = float(peak_energy)
         size = max(float(valley_size), 0.1)
+        distance = max(float(valley_distance), 0.0)
         self._updating_regions = True
+        
         try:
-            self.lower_region.setRegion((e - lower_gap - size, e - lower_gap))
-            self.upper_region.setRegion((e + upper_gap, e + upper_gap + size))
+            self.lower_region.setRegion((e - distance - size, e - distance))
+            self.upper_region.setRegion((e + distance, e + distance + size))
+
         finally:
             self._updating_regions = False
         self.valley_regions_changed.emit()
