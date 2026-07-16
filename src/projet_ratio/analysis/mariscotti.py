@@ -60,19 +60,43 @@ def mariscotti_transform(counts: np.ndarray, z: int = 5, w: int = 5) -> tuple[np
 
     return transform, raw
 
+def _savgol_smooth_numpy(values: np.ndarray, window: int, polyorder: int) -> np.ndarray:
+    """Small pure-NumPy Savitzky-Golay smoothing replacement.
 
-def _sanitize_savgol_window(window: int, polyorder: int, n: int) -> tuple[int, int] | None:
-    """Return a valid Savitzky-Golay window/polyorder pair, or None if unusable."""
+    This avoids scipy.signal.savgol_filter, which caused PyInstaller/SciPy
+    packaging problems, while preserving peak shapes better than a moving average.
+    """
+    values = np.asarray(values, dtype=float)
+    n = len(values)
+
     if n < 5:
-        return None
-    win = min(max(5, int(window) | 1), n if n % 2 == 1 else n - 1)
-    if win < 5:
-        return None
-    poly = min(int(polyorder), win - 1)
-    if win <= poly:
-        return None
-    return win, poly
+        return values.copy()
 
+    window = max(5, int(window))
+    if window % 2 == 0:
+        window += 1
+
+    if window >= n:
+        window = n if n % 2 == 1 else n - 1
+
+    if window < 5:
+        return values.copy()
+
+    polyorder = max(1, min(int(polyorder), window - 1))
+
+    half = window // 2
+    x = np.arange(-half, half + 1, dtype=float)
+
+    # Vandermonde matrix for polynomial fit.
+    design = np.vander(x, polyorder + 1, increasing=True)
+
+    # Coefficients that return the fitted value at x = 0.
+    coeffs = np.linalg.pinv(design)[0]
+
+    padded = np.pad(values, half, mode="edge")
+
+    # Convolution uses reversed coefficients.
+    return np.convolve(padded, coeffs[::-1], mode="valid")
 
 def find_candidates_strict(
     counts: np.ndarray,
@@ -96,15 +120,15 @@ def find_candidates_strict(
     axis = np.asarray(axis, dtype=float)
     if len(counts) != len(axis):
         raise ValueError("counts and axis must have the same length")
-
+        
     if smooth_counts:
-        smoothing_window = max(3, int(sg_window))
-        if smoothing_window % 2 == 0:
-            smoothing_window += 1
-        counts_for_transform = _moving_average(counts, smoothing_window)
+        counts_for_transform = _savgol_smooth_numpy(
+            counts,
+            sg_window,
+            sg_polyorder,
+        )
     else:
         counts_for_transform = counts
-
 
     transform, _raw = mariscotti_transform(counts_for_transform, z=z, w=w)
     sigma_t = _robust_sigma(transform)
@@ -213,22 +237,17 @@ def _fit_candidate_on_energy_axis(
     # centroid outside the local peak window or inflate sigma, which changes the
     # fitted area and therefore the peak-to-valley ratio dramatically.
     try:
-        y_sigma = np.sqrt(np.clip(y, 1.0, None))
-    
         popt, pcov = curve_fit(
             _gaussian_with_linear_background,
             x,
             y,
             p0=[amplitude0, mu0, sigma0, b0_0, b1_0],
-            sigma=y_sigma,
-            absolute_sigma=True,
             bounds=(
                 [0.0, float(np.min(x)), 0.3, -np.inf, -np.inf],
                 [np.inf, float(np.max(x)), np.inf, np.inf, np.inf],
             ),
             maxfev=10000,
         )
-
     except Exception:
         return None
 
