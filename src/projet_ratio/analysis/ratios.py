@@ -92,11 +92,12 @@ def peak_height_to_compton_height(
     peak: Peak,
     compton_energy: float,
 ) -> RatioResult:
-    peak_height = float(peak.amplitude)
-    peak_height_uncertainty = float(peak.amplitude_uncertainty)
+   
+    peak_height, peak_height_uncertainty = peak_height_and_uncertainty(
+        spectrum,
+        peak,
+    )
 
-    if not np.isfinite(peak_height_uncertainty):
-        peak_height_uncertainty = float(np.sqrt(max(peak_height, 0.0)))
 
     compton_height, compton_uncertainty = counts_at_energy(
         spectrum,
@@ -260,6 +261,7 @@ def peak_area_to_peak_area(
     )
 
 def peak_height_to_peak_height(
+    spectrum: Spectrum,
     peak_a: Peak,
     peak_b: Peak,
 ) -> RatioResult:
@@ -297,3 +299,33 @@ def peak_height_to_peak_height(
         ratio=ratio,
         ratio_uncertainty=ratio_uncertainty,
     )
+    
+def peak_height_and_uncertainty(
+    spectrum: Spectrum,
+    peak: Peak,
+    max_relative_fit_uncertainty: float = 1.0,
+) -> tuple[float, float]:
+    """Return fitted peak height with a robust uncertainty estimate.
+
+    The Gaussian-fit covariance can become unrealistically large when the fit is
+    poorly conditioned. For height ratios, fall back to a Poisson estimate from
+    raw counts at the peak energy if the fitted uncertainty is not usable.
+    """
+    peak_height = float(peak.amplitude)
+    fit_uncertainty = float(peak.amplitude_uncertainty)
+
+    raw_counts_at_peak, raw_uncertainty = counts_at_energy(
+        spectrum,
+        peak.peak_energy,
+    )
+
+    fit_uncertainty_is_usable = (
+        np.isfinite(fit_uncertainty)
+        and fit_uncertainty > 0
+        and fit_uncertainty <= max_relative_fit_uncertainty * abs(peak_height)
+    )
+
+    if fit_uncertainty_is_usable:
+        return peak_height, fit_uncertainty
+
+    return peak_height, raw_uncertainty

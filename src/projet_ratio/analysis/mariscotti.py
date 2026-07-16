@@ -213,17 +213,22 @@ def _fit_candidate_on_energy_axis(
     # centroid outside the local peak window or inflate sigma, which changes the
     # fitted area and therefore the peak-to-valley ratio dramatically.
     try:
+        y_sigma = np.sqrt(np.clip(y, 1.0, None))
+    
         popt, pcov = curve_fit(
             _gaussian_with_linear_background,
             x,
             y,
             p0=[amplitude0, mu0, sigma0, b0_0, b1_0],
+            sigma=y_sigma,
+            absolute_sigma=True,
             bounds=(
                 [0.0, float(np.min(x)), 0.3, -np.inf, -np.inf],
                 [np.inf, float(np.max(x)), np.inf, np.inf, np.inf],
             ),
             maxfev=10000,
         )
+
     except Exception:
         return None
 
