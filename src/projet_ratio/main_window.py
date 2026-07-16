@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from projet_ratio.analysis.mariscotti import detect_peaks, nearest_peak
+from projet_ratio.analysis.mariscotti import detect_peaks #, nearest_peak
 from projet_ratio.analysis.peak_to_valley import calculate_peak_to_valley
 from projet_ratio.analysis.ratios import (
     peak_area_to_compton_area,
@@ -87,8 +87,8 @@ class MainWindow(QMainWindow):
         self.show_all_peaks.setChecked(False)
         self.show_all_peaks.stateChanged.connect(self.toggle_all_peak_markers)
 
-        self.target_energy = self._double_spin(0.0, 4000.0, 661.6, 1, " keV")
-        self.tolerance = self._double_spin(0.1, 200.0, 6.0, 1, " keV")
+        #self.target_energy = self._double_spin(0.0, 4000.0, 661.6, 1, " keV")
+        #self.tolerance = self._double_spin(0.1, 200.0, 6.0, 1, " keV")
 
         self.valley_size = self._double_spin(0.1, 500.0, 18.0, 1, " keV")
         self.valley_size.valueChanged.connect(self.apply_valley_size)
@@ -188,10 +188,10 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.log_scale)
         file_layout.addWidget(self.show_all_peaks)
      
-        peak_box = QGroupBox("Peak selection")
-        peak_layout = QFormLayout(peak_box)
-        peak_layout.addRow("Target energy", self.target_energy)
-        peak_layout.addRow("Tolerance", self.tolerance)
+        #peak_box = QGroupBox("Peak selection")
+        #peak_layout = QFormLayout(peak_box)
+        #peak_layout.addRow("Target energy", self.target_energy)
+        #peak_layout.addRow("Tolerance", self.tolerance)
 
         ratio_box = QGroupBox("Ratio method")
         ratio_layout = QFormLayout(ratio_box)
@@ -250,18 +250,20 @@ class MainWindow(QMainWindow):
         mariscotti_outer_layout.addWidget(self.mariscotti_content)
 
         layout.addWidget(file_box)
-        layout.addWidget(peak_box)
+        #layout.addWidget(peak_box)
+        layout.addWidget(mariscotti_box)
+        layout.addWidget(self.detect_button)
+        layout.addWidget(QLabel("Detected peaks"))
+        layout.addWidget(self.peaks_table)
         layout.addWidget(ratio_box)
         layout.addWidget(self.valley_options_box)
         layout.addWidget(self.compton_options_box)
         layout.addWidget(self.background_options_box)
         layout.addWidget(self.peak_pair_options_box)
         layout.addWidget(depth_box)
-        layout.addWidget(mariscotti_box)
-        layout.addWidget(self.detect_button)
+        
         layout.addWidget(self.calculate_button)
-        layout.addWidget(QLabel("Detected peaks"))
-        layout.addWidget(self.peaks_table)
+        
         layout.addWidget(QLabel("Results"))
         layout.addWidget(self.results)
 
@@ -363,32 +365,9 @@ class MainWindow(QMainWindow):
 
         self._populate_peaks_table()
 
-        # Convenience selection only. No ratio calculation is performed here.
+        # No automatic target-energy selection anymore. The table is the source of truth.
         self.selected_peak = None
-        target_message = ""
-        try:
-            self.selected_peak = nearest_peak(self.peaks, self.target_energy.value(), self.tolerance.value())
-            self._select_peak_row(self.selected_peak)
-            
-            self.plot.set_region_defaults_for_peak(
-                self.selected_peak.peak_energy,
-                self.valley_size.value(),
-                self.valley_distance.value(),
-            )
-
-            self.plot.set_background_defaults_for_peak(
-                self.selected_peak.peak_energy,
-                background_size=self.background_roi_size.value(),
-                background_distance=self.background_roi_distance.value(),
-            )
-
-            target_message = f" Nearest target peak selected: {self.selected_peak.peak_energy:.3f} keV."
-        except Exception:
-            target_message = (
-                f" No peak close to {self.target_energy.value():.1f} keV was auto-selected. "
-                "Select a peak in the table or change the target/tolerance."
-            )
-
+        target_message = " Select a peak in the table before calculating a ratio."
         self.refresh_peak_markers()
         self.results.setText(
             f"Detected {len(self.peaks)} fitted peaks." + target_message + "\n"
@@ -438,7 +417,7 @@ class MainWindow(QMainWindow):
         if row < 0 or row >= len(self.peaks):
             return
         self.selected_peak = self.peaks[row]
-        self.target_energy.setValue(self.selected_peak.peak_energy)
+        #self.target_energy.setValue(self.selected_peak.peak_energy)
         self.refresh_peak_markers()
         
         self.plot.set_region_defaults_for_peak(
