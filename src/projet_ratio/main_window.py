@@ -260,9 +260,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.compton_options_box)
         layout.addWidget(self.background_options_box)
         layout.addWidget(self.peak_pair_options_box)
+        layout.addWidget(self.calculate_button)
         layout.addWidget(depth_box)
         
-        layout.addWidget(self.calculate_button)
+       
         
         layout.addWidget(QLabel("Results"))
         layout.addWidget(self.results)
