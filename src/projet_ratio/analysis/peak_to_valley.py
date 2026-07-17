@@ -55,7 +55,12 @@ def calculate_peak_to_valley(
         + (valley_unc / valley_counts) ** 2
     )
 
-    acceptable = bool((lower_counts / upper_counts) >= 2.0) if upper_counts > 0 else False
+    
+    if upper_counts <= 0:
+        acceptable = lower_counts > 0
+    else:
+        acceptable = (lower_counts / upper_counts) >= 2
+
 
     return PeakToValleyResult(
         peak=peak,
